@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: slide-studio
+    runtime: docker
+    plan: free          # bepul reja uxlab qoladi; doimiy ishlashi uchun 'starter' ga o'zgartiring
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: AI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: TELEGRAM_MODE
+        value: auto
+      - key: LOG_LEVEL
+        value: warning
+      - key: SLIDE_STUDIO_HMAC_SECRET
+        generateValue: true
+      - key: AI_BASE_URL
+        value: https://api.deepseek.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: FREE_DAILY_PAGES
+        value: "15"
+      - key: PAGES_PER_PACK
+        value: "150"
+      - key: PACK_PRICE_USD
+        value: "1.00"
+      - key: IMG_PROXY_CACHE_MB
+        value: "32"
+      - key: LEMON_SQUEEZY_API_KEY
+        sync: false
+      - key: LEMON_SQUEEZY_STORE_ID
+        sync: false
+      - key: LEMON_SQUEEZY_VARIANT_ID
+        sync: false
+      - key: LEMON_SQUEEZY_WEBHOOK_SECRET
+        sync: false
