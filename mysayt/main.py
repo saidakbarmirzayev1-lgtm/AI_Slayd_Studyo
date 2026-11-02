@@ -826,7 +826,7 @@ try:
         apply_reset=apply_24h_reset,
         charge=charge_for_ai_turn,
         save_usage=save_user_credits,
-        ledger_log=ledger_log,
+        ledger_log=lambda *a, **k: ledger_log(*a, **k),   # v44.1: ledger_log pastroqda e'lon qilingan -> kech bog'lanadi (NameError tuzatildi)
         total_credits=total_credits,
         MODES=MODES,
         ai=lambda: {
@@ -839,6 +839,7 @@ try:
     app.include_router(tgbot.router)
 except Exception as _tg_err:
     tgbot = None
+    import traceback; traceback.print_exc()
     print(f"[TG] bot moduli yuklanmadi: {_tg_err}")
 
 _bg_tasks: set = set()
