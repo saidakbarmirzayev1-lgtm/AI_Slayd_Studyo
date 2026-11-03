@@ -1,30 +1,32 @@
 """
-Slide Studio — Telegram bot (v44).  FastAPI ichida ishlaydi.
+Slide Studio — Telegram bot (v45).  FastAPI ichida ishlaydi (aiogram shart emas: to'g'ridan-to'g'ri Bot API, kam RAM).
 
-Bot nima qiladi (saytdagi kabi):
-  1) Foydalanuvchi mavzuni (yoki batafsil topshiriqni) matn qilib yozadi.
-  2) Bot slayd sonini so'raydi (yoki matndagi "10 ta slayd" ni o'zi oladi) va AI slaydlarni yozadi.
-  3) Tayyor bo'lgach foydalanuvchi XOHLAGAN formatni bosadi: PPTX / PDF / HTML yoki "Hammasi" (3 ta fayl birdan).
-  4) Xohlasa "✏️ Tahrirlash" — oddiy matn bilan AI'ga aytadi (saytdagi chat kabi); "🎨 Rang" — mavzu rangi (bepul).
-  Telegram akkaunt = sayt akkaunti (tg<ID>@t.me): kreditlar (AI varaqlar) Mini App va bot uchun BITTA.
+Oqim:
+  1) Foydalanuvchi mavzuni yozadi (yoki «🎨 Yangi slayd yaratish») -> AI darhol slaydlarni yozadi -> PPTX + PDF + HTML birdan yuboriladi.
+  2) Tayyor slaydni matn bilan tahrirlash: «3-slaydni qisqartir» — AI faqat kerakli slaydlarni o'zgartiradi (ops), yangi fayllar qaytariladi.
+  3) Fayllar FAQAT RAM'da yasaladi, yuborilgach darhol tashlanadi. Bazada (Supabase) faqat foydalanuvchi, balans va qisqa slayd JSON.
+  4) Bir baza: balans `user_usage` jadvalida — bot, Mini App va sayt bir xil raqamni ko'radi. Google akkaunt `/link KOD` bilan ulanadi.
 
 Ulanish usullari (TELEGRAM_MODE):  auto (standart) | webhook | polling
-  auto: avval webhook; o'rnatilmasa avtomatik long-polling ga o'tadi (bot baribir javob beradi).
-
 Kerakli env:  TELEGRAM_BOT_TOKEN (majburiy), PUBLIC_BASE_URL (https://...), TELEGRAM_WEBHOOK_SECRET (ixtiyoriy)
+Jadvallar: SUPABASE_TELEGRAM.sql
 """
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import hmac
 import html
 import json
 import os
 import re
+import secrets
 import time
+import uuid
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, quote
 
 import httpx
@@ -149,24 +151,26 @@ def esc(s: Any) -> str:
 # ----------------------------------------------------------------------------------------------
 # Matnlar
 # ----------------------------------------------------------------------------------------------
-WELCOME = (
-    "Salom! Men <b>Slide Studio AI</b> botiman 🎨\n"
-    "Soniyalar ichida professional taqdimot tayyorlab beraman — xuddi saytdagidek.\n\n"
-    "<b>Qanday ishlaydi?</b>\n"
-    "1️⃣ Mavzuni yozing, masalan: <i>«Sun'iy intellekt kelajagi»</i>\n"
-    "    (xohlasangiz batafsil: <i>«10 ta slayd, tibbiyotda SI, rasmsiz»</i>)\n"
-    "2️⃣ AI slaydlarni yozadi\n"
-    "3️⃣ Xohlagan formatda yuklab oling: <b>PPTX · PDF · HTML</b> yoki <b>hammasini birdan</b> 📦\n\n"
-    "Tayyor bo'lgach matn bilan tahrirlashingiz ham mumkin: <i>«3-slaydni qisqartir»</i>."
-)
+BTN_NEW = "🎨 Yangi slayd yaratish"
+BTN_MY = "📂 Slaydlarim / Tozalash"
+BTN_BAL = "💳 Balans / To'ldirish"
+BTN_SITE = "🌐 Saytga o'tish"
+MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site"}
+DEFAULT_SLIDES = 8
+
 HELP = (
     "<b>Buyruqlar</b>\n"
     "/start — bosh menyu\n"
-    "/new — yangi taqdimot\n"
+    "/new — yangi slayd yaratish\n"
+    "/my — saqlangan slaydlarim\n"
+    "/clear — barcha slaydlarimni tozalash\n"
+    "/credits — balans (varaqlar)\n"
     "/mode — Tez ⚡ / Chuqur 🧠 AI rejimi\n"
-    "/credits — kreditlarim (AI varaqlar)\n"
+    "/link KOD — sayt akkauntini ulash · /unlink — uzish\n"
     "/site — saytga havola\n\n"
-    "Mavzuni oddiy xabar qilib yozing. Slayd soni, rang, rasm haqida xohishingizni ham yozishingiz mumkin.\n"
+    "Mavzuni oddiy xabar qilib yozing — AI darhol <b>PPTX + PDF + HTML</b> tayyorlab yuboradi. "
+    "Slayd soni, rang, rasm haqida ham yozishingiz mumkin: <i>«10 ta slayd, tibbiyotda SI, yashil rang»</i>.\n"
+    "Tayyor slaydni matn bilan tahrirlang: <i>«3-slaydni qisqartir»</i>, <i>«sarlavhasini o'zgartir»</i>.\n"
     "Narx: <b>1 slayd = 1 varaq</b> (Chuqur AI — 3 baravar). Kuniga bepul varaqlar beriladi."
 )
 GREETING_RE = re.compile(r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalay|nima gap|start|boshla)[\s!.,?]*$", re.I)
@@ -184,10 +188,18 @@ def _btn(text: str, data: str) -> dict:
     return {"text": text, "callback_data": data}
 
 
+def kb_reply() -> dict:
+    """Doimiy pastki menyu (foydalanuvchi har doim ko'radi)."""
+    return {
+        "keyboard": [[{"text": BTN_NEW}], [{"text": BTN_MY}, {"text": BTN_BAL}], [{"text": BTN_SITE}]],
+        "resize_keyboard": True, "is_persistent": True, "input_field_placeholder": "Slayd mavzusini yozing…",
+    }
+
+
 def kb_main(topic: str = "") -> dict:
     return {"inline_keyboard": [
         [{"text": "🚀 Muharrirda ochish (Mini App)", "web_app": {"url": _app_url(topic)}}],
-        [{"text": "🌐 Saytga o'tish", "url": SITE_URL}, _btn("💳 Kreditlarim", "credits")],
+        [_btn("💎 Varaq sotib olish", "buy"), _btn("💳 Balans", "bal")],
     ]}
 
 
@@ -202,7 +214,8 @@ def kb_done(topic: str = "") -> dict:
     return {"inline_keyboard": [
         [_btn("📊 PPTX", "dl:pptx"), _btn("📕 PDF", "dl:pdf"), _btn("🌐 HTML", "dl:html")],
         [_btn("📦 Hammasi — 3 ta fayl birdan", "dl:all")],
-        [_btn("✏️ Tahrirlash", "edit"), _btn("🎨 Rang", "theme"), _btn("🆕 Yangi", "new")],
+        [_btn("✏️ Tahrirlash", "edit"), _btn("🎨 Rang", "theme")],
+        [_btn("🆕 Yangi slayd", "new"), _btn("📂 Slaydlarim", "my")],
         [{"text": "🚀 Muharrirda ochish (sayt)", "web_app": {"url": _app_url(topic)}}],
     ]}
 
@@ -219,6 +232,15 @@ def kb_themes() -> dict:
         rows.append(row)
     rows.append([_btn("⬅️ Orqaga", "back")])
     return {"inline_keyboard": rows}
+
+
+def kb_balance(linked: bool) -> dict:
+    rows = [[_btn("💎 Varaq sotib olish", "buy")]]
+    if not linked:
+        rows.append([_btn("🔗 Sayt akkauntini ulash", "linkinfo")])
+    rows.append([{"text": "🌐 Saytda ochish", "web_app": {"url": _app_url()}}])
+    return {"inline_keyboard": rows}
+
 
 
 # ----------------------------------------------------------------------------------------------
@@ -259,8 +281,24 @@ _chats: "OrderedDict[int, dict]" = OrderedDict()
 MAX_CHATS, CHAT_TTL = 300, 3 * 3600
 
 
+IMG_TTL = 600
+_last_sweep = 0.0
+
+
+def _sweep_imgs(now: float) -> None:
+    """Fayl yuborilmay qolgan rasmlar 10 daqiqadan keyin RAM'dan tashlanadi (xotira o'smasin)."""
+    global _last_sweep
+    if now - _last_sweep < 60:
+        return
+    _last_sweep = now
+    for v in _chats.values():
+        if v.get("imgs") and now - v.get("img_ts", 0) > IMG_TTL and not v.get("busy") and not v.get("sending"):
+            v["imgs"] = {}
+
+
 def _state(chat_id: int) -> dict:
     now = time.time()
+    _sweep_imgs(now)
     st = _chats.pop(chat_id, None)
     if st is None or now - st.get("ts", 0) > CHAT_TTL:
         st = {"mode": (st or {}).get("mode", "fast"), "busy": False}
@@ -326,29 +364,47 @@ def _provision_sync(user: dict) -> dict:
     return {"uid": str(u.id), "email": email, "name": name, "hashed": hashed}
 
 
-_uids: "OrderedDict[int, str]" = OrderedDict()
+_uids: "OrderedDict[int, Tuple[str, str]]" = OrderedDict()      # tg_id -> (uid, email)
+
+
+def _linked_sync(tid: int) -> Optional[Tuple[str, str]]:
+    """Telegram ID sayt (Google) akkauntiga ulangan bo'lsa (uid, email), aks holda None."""
+    sb = _sb()
+    if not sb:
+        return None
+    try:
+        res = sb.table("tg_links").select("user_id,email").eq("tg_id", int(tid)).limit(1).execute()
+        if res.data:
+            return str(res.data[0]["user_id"]), str(res.data[0]["email"])
+    except Exception as e:
+        _warn("links", f"tg_links o'qilmadi (SUPABASE_TELEGRAM.sql ishga tushirilganmi?): {str(e)[:100]}")
+    return None
 
 
 def _ensure_uid_sync(user: dict) -> Tuple[str, str]:
+    """(uid, email). Avval ulangan sayt akkaunti, bo'lmasa tg<ID>@t.me akkaunti (Mini App bilan bir xil)."""
     tid = int(user["id"])
-    email = _tg_email(tid)
     if tid in _uids:
-        return _uids[tid], email
-    sb = _sb()
-    uid = ""
-    if sb:
-        res = sb.table("user_usage").select("user_id").eq("email", email).limit(1).execute()
-        if res.data:
-            uid = str(res.data[0]["user_id"])
-    if not uid:
-        r = _provision_sync(user)
-        if r.get("error"):
-            raise RuntimeError(r["error"])
-        uid = r["uid"]
-    _uids[tid] = uid
+        return _uids[tid]
+    res = _linked_sync(tid)
+    if not res:
+        email = _tg_email(tid)
+        sb = _sb()
+        uid = ""
+        if sb:
+            q = sb.table("user_usage").select("user_id").eq("email", email).limit(1).execute()
+            if q.data:
+                uid = str(q.data[0]["user_id"])
+        if not uid:
+            r = _provision_sync(user)
+            if r.get("error"):
+                raise RuntimeError(r["error"])
+            uid = r["uid"]
+        res = (uid, email)
+    _uids[tid] = res
     while len(_uids) > 5000:
         _uids.popitem(last=False)
-    return uid, email
+    return res
 
 
 async def _ensure_uid(user: dict) -> Tuple[str, str]:
@@ -395,27 +451,65 @@ def _fmt_wait(sec: Any) -> str:
     return f"{h} soat {m} daqiqa" if h else f"{m} daqiqa"
 
 
-async def _credits_text(user: dict) -> str:
+async def _balance_info(user: dict) -> Optional[dict]:
+    """Bazadan HAR SAFAR yangi o'qiladi (keshlanmaydi) — sayt va bot bir xil raqamni ko'radi."""
     try:
         uid, email = await _ensure_uid(user)
         u = await asyncio.to_thread(_usage_now_sync, uid, email)
         p = _deps["usage_payload"](u)
     except Exception as e:
         _warn("credits", f"kredit o'qish xatosi: {str(e)[:120]}")
-        return "⚠️ Hozir balansni o'qib bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+        return None
     m = p.get("modes") or {}
     fast, deep = m.get("fast") or {}, m.get("deep") or {}
+    return {
+        "free": fast.get("free_pages", 0), "paid": fast.get("paid_pages", 0),
+        "fast": fast.get("pages_exact", 0), "deep": deep.get("pages_exact", 0),
+        "wait": _fmt_wait(p.get("next_reset_in_seconds")) if p.get("window_started") else "",
+        "linked": email != _tg_email(int(user["id"])), "email": email,
+    }
+
+
+def _mask_email(e: str) -> str:
+    a, _, d = (e or "").partition("@")
+    return (a[:1] + "***@" + d) if d else "***"
+
+
+def _balance_block(i: dict) -> str:
     lines = [
-        "💳 <b>Kreditlarim</b>\n",
-        f"⚡ Tez AI: <b>{_fmt_pages(fast.get('pages_exact', 0))}</b> varaq",
-        f"🧠 Chuqur AI: <b>{_fmt_pages(deep.get('pages_exact', 0))}</b> varaq",
-        f"\n🎁 Bepul (kunlik): {_fmt_pages(fast.get('free_pages', 0))}  ·  💎 Pullik: {_fmt_pages(fast.get('paid_pages', 0))}",
+        f"• Bepul balans: <b>{_fmt_pages(i['free'])}</b> varaq (bugun uchun)",
+        f"• Pullik balans: <b>{_fmt_pages(i['paid'])}</b> varaq",
     ]
-    w = _fmt_wait(p.get("next_reset_in_seconds"))
-    if w and p.get("window_started"):
-        lines.append(f"🔄 Bepul varaqlar yangilanishiga: {w}")
-    lines.append("\n<i>1 slayd = 1 varaq. Ko'proq varaq kerak bo'lsa — saytda «Sotib olish».</i>")
+    if i.get("wait"):
+        lines.append(f"🔄 Bepul varaqlar yangilanishi: <b>{i['wait']}</b> dan keyin")
     return "\n".join(lines)
+
+
+def _welcome_text(name: str, info: Optional[dict]) -> str:
+    hello = f"Salom, <b>{esc(name)}</b>! 👋" if name else "Salom! 👋"
+    bal = ("\n\n💳 <b>Balansingiz:</b>\n" + _balance_block(info)) if info else ""
+    return (
+        f"{hello}\nMen <b>Slide Studio AI</b> botiman. 🎨\n\n"
+        "Bir necha daqiqada professional taqdimot tayyorlab beraman: mavzuni yozing — "
+        "AI slaydlarni yozadi va <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi.\n"
+        "Tayyor bo'lgach matn bilan tahrirlash ham mumkin: <i>«3-slaydni qisqartir»</i>."
+        f"{bal}\n\n👇 Pastdagi tugmalardan foydalaning yoki mavzuni yozing."
+    )
+
+
+async def _credits_text(user: dict) -> str:
+    i = await _balance_info(user)
+    if not i:
+        return "⚠️ Hozir balansni o'qib bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+    link = (f"🔗 Sayt akkaunti: <b>ulangan</b> ({esc(_mask_email(i['email']))}) — balans saytda ham bir xil."
+            if i["linked"] else
+            "🔗 Sayt akkaunti: <b>ulanmagan</b>. Google bilan kirgan akkauntingiz balansi bilan birlashtirish uchun «Sayt akkauntini ulash» ni bosing "
+            "(Mini App orqali kirsangiz ham balans bir xil bo'ladi).")
+    return (
+        "💳 <b>Balansingiz</b>\n\n" + _balance_block(i) +
+        f"\n\n⚡ Tez AI: <b>{_fmt_pages(i['fast'])}</b> varaq · 🧠 Chuqur AI: <b>{_fmt_pages(i['deep'])}</b> varaq\n\n"
+        f"{link}\n\n<i>1 slayd = 1 varaq. Ko'proq kerak bo'lsa — «Varaq sotib olish».</i>"
+    )
 
 
 async def _charge(uid: str, email: str, pages: int, tokens: int, mode: str, details: dict) -> Tuple[dict, int]:
@@ -429,6 +523,254 @@ async def _charge(uid: str, email: str, pages: int, tokens: int, mode: str, deta
         if int(charged) > 0:
             await asyncio.to_thread(_deps["ledger_log"], uid, "tg_" + str(reason), -int(charged), usage, 0, details)
         return usage, int(charged)
+
+
+# ----------------------------------------------------------------------------------------------
+# Supabase: faqat MA'LUMOT (qisqa slayd JSON, ulanish). Fayllar (PPTX/PDF/HTML) HECH QACHON saqlanmaydi.
+# Jadvallar: SUPABASE_TELEGRAM.sql. Jadval yo'q bo'lsa bot baribir ishlaydi (faqat RAM, restartda tarix yo'qoladi).
+# ----------------------------------------------------------------------------------------------
+MAX_SAVED = 5
+LINK_TTL = 600
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _as_uuid(v: Any) -> Optional[str]:
+    try:
+        return str(uuid.UUID(str(v)))
+    except Exception:
+        return None
+
+
+def _db_warn(e: Exception) -> None:
+    _warn("db", f"Supabase jadval xatosi (SUPABASE_TELEGRAM.sql ishga tushirilganmi?): {str(e)[:120]}")
+
+
+def _deck_insert_sync(tid: int, uid: str, deck: dict, topic: str, lang: str) -> Optional[int]:
+    sb = _sb()
+    if not sb:
+        return None
+    try:
+        r = sb.table("tg_decks").insert({
+            "tg_id": int(tid), "user_id": _as_uuid(uid), "title": str(deck.get("title") or "")[:120],
+            "topic": (topic or "")[:300], "lang": lang or "uz", "deck": deck,
+        }).execute()
+        new_id = r.data[0]["id"] if r.data else None
+        rows = sb.table("tg_decks").select("id").eq("tg_id", int(tid)).order("updated_at", desc=True).limit(60).execute().data or []
+        old = [x["id"] for x in rows[MAX_SAVED:]]
+        if old:
+            sb.table("tg_decks").delete().in_("id", old).execute()
+        return new_id
+    except Exception as e:
+        _db_warn(e)
+        return None
+
+
+def _deck_update_sync(deck_id: int, tid: int, deck: dict) -> bool:
+    sb = _sb()
+    if not sb:
+        return False
+    try:
+        sb.table("tg_decks").update({"deck": deck, "title": str(deck.get("title") or "")[:120], "updated_at": _now_iso()}) \
+            .eq("id", int(deck_id)).eq("tg_id", int(tid)).execute()
+        return True
+    except Exception as e:
+        _db_warn(e)
+        return False
+
+
+def _deck_list_sync(tid: int) -> List[dict]:
+    sb = _sb()
+    if not sb:
+        return []
+    try:
+        return sb.table("tg_decks").select("id,title,updated_at").eq("tg_id", int(tid)).order("updated_at", desc=True).limit(MAX_SAVED).execute().data or []
+    except Exception as e:
+        _db_warn(e)
+        return []
+
+
+def _deck_get_sync(tid: int, deck_id: Optional[int] = None) -> Optional[dict]:
+    sb = _sb()
+    if not sb:
+        return None
+    try:
+        q = sb.table("tg_decks").select("id,title,topic,lang,deck").eq("tg_id", int(tid))      # tg_id sharti: begona slaydni ochib bo'lmaydi
+        q = q.eq("id", int(deck_id)) if deck_id else q.order("updated_at", desc=True).limit(1)
+        rows = q.execute().data or []
+        return rows[0] if rows else None
+    except Exception as e:
+        _db_warn(e)
+        return None
+
+
+def _deck_clear_sync(tid: int) -> int:
+    sb = _sb()
+    if not sb:
+        return 0
+    try:
+        return len(sb.table("tg_decks").delete().eq("tg_id", int(tid)).execute().data or [])
+    except Exception as e:
+        _db_warn(e)
+        return 0
+
+
+async def _restore_deck(chat_id: int, deck_id: Optional[int] = None) -> bool:
+    """RAM'da deck bo'lmasa (restart / eskirgan) — bazadagi oxirgi (yoki tanlangan) slaydni tiklaydi. Private chat: chat_id == tg_id."""
+    st = _state(chat_id)
+    if st.get("deck") and not deck_id:
+        return True
+    row = await asyncio.to_thread(_deck_get_sync, chat_id, deck_id)
+    if not row or not decks:
+        return False
+    deck = decks.normalize_deck(row.get("deck"), MAX_SLIDES + 10, row.get("title") or "")
+    if not deck:
+        return False
+    st.update(deck=deck, deck_id=row.get("id"), topic=row.get("topic") or "", lang=row.get("lang") or "uz", imgs={}, awaiting=None)
+    return True
+
+
+# ----------------------------------------------------------------------------------------------
+# Sayt akkaunti (Google) <-> Telegram ulash (bir martalik kod orqali). Bir xil balans uchun.
+# ----------------------------------------------------------------------------------------------
+_BOT_USER = ""
+
+
+async def _bot_username() -> str:
+    global _BOT_USER
+    if not _BOT_USER:
+        me = await tg("getMe")
+        if isinstance(me, dict):
+            _BOT_USER = str(me.get("username") or "")
+    return _BOT_USER
+
+
+def _link_code_sync(user_id: str, email: str) -> str:
+    sb = _sb()
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    code = "".join(secrets.choice(alphabet) for _ in range(8))
+    sb.table("tg_link_codes").delete().eq("user_id", user_id).execute()
+    sb.table("tg_link_codes").insert({
+        "code": code, "user_id": user_id, "email": email,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=LINK_TTL)).isoformat(),
+    }).execute()
+    return code
+
+
+def _link_consume_sync(user: dict, code: str) -> dict:
+    sb = _sb()
+    if not sb:
+        return {"error": "db"}
+    tid = int(user["id"])
+    code = re.sub(r"[^A-Za-z0-9]", "", code or "").upper()[:16]
+    if not code:
+        return {"error": "bad_code"}
+    try:
+        res = sb.table("tg_link_codes").select("*").eq("code", code).limit(1).execute()
+    except Exception as e:
+        _db_warn(e)
+        return {"error": "db"}
+    if not res.data:
+        return {"error": "bad_code"}
+    row = res.data[0]
+    try:
+        exp = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00"))
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        expired = exp < datetime.now(timezone.utc)
+    except Exception:
+        expired = True
+    sb.table("tg_link_codes").delete().eq("code", code).execute()          # bir martalik
+    if expired:
+        return {"error": "bad_code"}
+    uid, email = str(row["user_id"]), str(row["email"])
+
+    # Oldin botda sotib olingan PULLIK varaqlar yo'qolmasin: tg<ID>@t.me akkauntidan sayt akkauntiga ko'chiriladi.
+    # (Bepul kunlik varaqlar ko'chirilmaydi — ikki akkaunt orqali ko'paytirib bo'lmasin.)
+    moved = 0
+    try:
+        tg_email = _tg_email(tid)
+        q = sb.table("user_usage").select("user_id").eq("email", tg_email).limit(1).execute()
+        if q.data and str(q.data[0]["user_id"]) != uid:
+            src_uid = str(q.data[0]["user_id"])
+            src = _deps["apply_reset"](_deps["get_usage"](src_uid, tg_email))
+            paid = int(src.get("paid_credits") or 0)
+            if paid > 0:
+                dst = _deps["apply_reset"](_deps["get_usage"](uid, email))
+                dst["paid_credits"] = int(dst.get("paid_credits") or 0) + paid
+                src["paid_credits"] = 0
+                _deps["save_usage"](uid, dst, 0)
+                _deps["save_usage"](src_uid, src, 0)
+                moved = paid
+                try:
+                    _deps["ledger_log"](uid, "tg_link_in", paid, dst, 0, {"from": src_uid})
+                    _deps["ledger_log"](src_uid, "tg_link_out", -paid, src, 0, {"to": uid})
+                except Exception:
+                    pass
+    except Exception as e:
+        _warn("link-move", f"pullik varaqlarni ko'chirib bo'lmadi: {str(e)[:120]}")
+
+    try:
+        sb.table("tg_links").delete().eq("tg_id", tid).execute()
+        sb.table("tg_links").delete().eq("user_id", uid).execute()
+        sb.table("tg_links").insert({"tg_id": tid, "user_id": uid, "email": email}).execute()
+    except Exception as e:
+        _db_warn(e)
+        return {"error": "db"}
+    _uids[tid] = (uid, email)
+    pages = 0.0
+    try:
+        pages = moved / _page_units("fast")
+    except Exception:
+        pass
+    return {"ok": True, "email": email, "moved_pages": pages}
+
+
+def _unlink_sync(tid: int) -> bool:
+    sb = _sb()
+    if not sb:
+        return False
+    try:
+        sb.table("tg_links").delete().eq("tg_id", int(tid)).execute()
+        _uids.pop(int(tid), None)
+        return True
+    except Exception as e:
+        _db_warn(e)
+        return False
+
+
+async def notify_purchase(user_id: str, pages: int, refund: bool = False) -> None:
+    """main.py to'lov webhook'idan chaqiriladi: balans bazada yangilangan — foydalanuvchiga darhol xabar."""
+    if not ENABLED:
+        return
+
+    def find() -> Optional[Tuple[int, str]]:
+        sb = _sb()
+        if not sb:
+            return None
+        email = ""
+        r = sb.table("user_usage").select("email").eq("user_id", user_id).limit(1).execute()
+        if r.data:
+            email = str(r.data[0].get("email") or "")
+        l = sb.table("tg_links").select("tg_id").eq("user_id", user_id).limit(1).execute()
+        if l.data:
+            return int(l.data[0]["tg_id"]), email
+        m = re.match(r"^tg(\d+)@t\.me$", email)
+        return (int(m.group(1)), email) if m else None
+
+    try:
+        hit = await asyncio.to_thread(find)
+        if not hit:
+            return
+        tid, email = hit
+        usage = await asyncio.to_thread(_usage_now_sync, user_id, email)
+        left = _pages_left(usage, "fast")
+        head = f"↩️ To'lov qaytarildi: <b>−{pages}</b> varaq." if refund else f"✅ To'lov qabul qilindi: <b>+{pages}</b> varaq!"
+        await _send(tid, f"{head}\n💳 Balansingiz: <b>{_fmt_pages(left)}</b> varaq", kb_main())
+    except Exception as e:
+        _warn("notify", f"to'lov xabari yuborilmadi: {str(e)[:100]}")
 
 
 # ----------------------------------------------------------------------------------------------
@@ -465,18 +807,140 @@ RULES
 """
 
 EDIT_SYSTEM = """You are Slide Studio AI, the editor of an existing slide deck. Return ONLY one valid JSON object (json), no markdown fences.
-You receive the CURRENT DECK (json) and the user's NEW MESSAGE. Decide the intent:
-1) "edit"      — the user wants to change the deck (shorten, rewrite, translate, add/remove/reorder slides, change colours, fix a fact...).
-   Return {"intent":"edit","reply":"1-2 short sentences saying what you changed","deck":{...the COMPLETE updated deck in the same schema...}}
-2) "new_topic" — the message is clearly a NEW presentation topic unrelated to the current deck.
-   Return {"intent":"new_topic"}
-3) "chat"      — a question or small talk about the deck, not requesting a change.
-   Return {"intent":"chat","reply":"helpful answer, max 4 sentences"}
-DECK SCHEMA: {"title","subtitle","theme":"ocean|violet|forest|sunset|rose|slate|teal","slides":[{"layout":"title|bullets|cards|stats|quote|closing", ...}]}
- - title/closing: title, subtitle · bullets: title, bullets[3-5], image · cards: title, cards[{heading,text}] (2-4) · stats: title, stats[{value,label}] (2-4) · quote: text, author
- - first slide is "title", last slide is "closing". Keep untouched slides EXACTLY as they are. "image" is a short English search query or "".
- - Keep the language of the deck unless asked to translate. No emoji, no markdown symbols. Reply in the user's language.
+You receive: OUTLINE (every slide, numbered from 1), the FULL JSON of the slides that matter (or of the whole deck), and the user's NEW MESSAGE.
+Decide the intent:
+1) "edit" — the user wants a change (shorten, rewrite, retitle, translate, add/remove/move slides, change colours, fix a fact...).
+   Return {"intent":"edit","reply":"1-2 short sentences saying what you changed","ops":[ ... ]}
+   Change ONLY what was asked. Never rewrite untouched slides. Operations (slide numbers = numbering in the OUTLINE; the server applies them in order):
+   {"op":"replace","index":3,"slide":{...complete new slide...}}        — rewrite one slide
+   {"op":"insert","after":5,"slide":{...}}                              — add a slide after slide 5 (never before the title slide)
+   {"op":"delete","index":4}                                            — remove a slide (never the title slide)
+   {"op":"move","index":6,"after":2}                                    — move slide 6 right after slide 2
+   {"op":"meta","title":"...","subtitle":"...","theme":"ocean|violet|forest|sunset|rose|slate|teal"}  — deck title / subtitle / colour (any subset of the fields)
+   For slide 1 use "replace" with layout "title" (that is how «sarlavhasini o'zgartir» works for the deck title: also send a "meta" op with the new title).
+   Only if nearly EVERY slide must change (translate the whole deck, rewrite everything) you may return "deck" (the COMPLETE updated deck) instead of "ops".
+2) "new_topic" — the message is clearly a NEW presentation topic unrelated to the current deck.   Return {"intent":"new_topic"}
+3) "chat" — a question or small talk about the deck, not requesting a change.   Return {"intent":"chat","reply":"helpful answer, max 4 sentences"}
+SLIDE SCHEMA (field "layout"): title/closing: title, subtitle · bullets: title, bullets[3-5], image · cards: title, cards[{heading,text}] (2-4) · stats: title, stats[{value,label}] (2-4) · quote: text, author
+ - "image" is a short ENGLISH photo search query or "". Keep the language of the deck unless asked to translate. No emoji, no markdown symbols. Reply in the user's language.
 """
+
+_NUM_A = re.compile(r"(\d{1,2})\s*[-–]?\s*(?:chi|nchi|inchi|-chi)?\s*(?:slayd\w*|slaid\w*|slide\w*|слайд\w*|varaq\w*|sahifa\w*|page\w*)", re.I)
+_NUM_B = re.compile(r"(?:slayd\w*|slaid\w*|slide\w*|слайд\w*|varaq\w*|sahifa\w*|page\w*)\s*(?:№|#|raqam\w*)?\s*(\d{1,2})\b", re.I)
+_LAST_RE = re.compile(r"\b(oxirgi|yakuniy|so'nggi|последн\w*|last)\b", re.I)
+_FIRST_RE = re.compile(r"\b(birinchi|muqova|titul|первы\w*|first|cover)\b", re.I)
+
+
+def _focus_indexes(text: str, total: int) -> List[int]:
+    """Xabarda tilga olingan slayd raqamlari (1-based). Bo'sh bo'lsa — butun deck AI'ga beriladi."""
+    found = set()
+    for rx in (_NUM_A, _NUM_B):
+        for m in rx.finditer(text or ""):
+            n = int(m.group(1))
+            if 1 <= n <= total:
+                found.add(n)
+    if _LAST_RE.search(text or ""):
+        found.add(total)
+    if _FIRST_RE.search(text or ""):
+        found.add(1)
+    return sorted(found)
+
+
+def _outline(deck: dict) -> str:
+    out = []
+    for i, s in enumerate(deck.get("slides", []), 1):
+        t = s.get("title") or s.get("text") or ""
+        out.append(f"{i}. [{s.get('layout')}] {decks.clean(t, 70)}")
+    return "\n".join(out)
+
+
+def _edit_prompt(deck: dict, text: str) -> str:
+    slides = deck.get("slides", [])
+    focus = _focus_indexes(text, len(slides))
+    slim = lambda s: {k: v for k, v in s.items() if v not in ("", None, [])}
+    head = f"DECK: title={json.dumps(deck.get('title'), ensure_ascii=False)} theme={deck.get('theme')}\nOUTLINE:\n{_outline(deck)}\n\n"
+    if focus:
+        body = "FULL JSON OF THE SLIDES THE USER MENTIONED:\n" + json.dumps({str(i): slim(slides[i - 1]) for i in focus}, ensure_ascii=False)
+    else:
+        body = "FULL DECK JSON:\n" + _deck_for_prompt(deck)
+    return f"{head}{body}\n\nNEW MESSAGE:\n{text}"
+
+
+def _apply_ops(deck: dict, ops: Any) -> Tuple[Optional[dict], int]:
+    """AI bergan amallarni deck nusxasiga qo'llaydi. (yangi_deck | None, o'zgargan/qo'shilgan slaydlar soni).
+    Tegilmagan slaydlar AYNAN o'zgarishsiz qoladi."""
+    if not isinstance(ops, list) or not ops:
+        return None, 0
+    items: List[List[Any]] = [[i, dict(s)] for i, s in enumerate(deck["slides"], 1)]     # [asl_raqam, slayd]
+    title, subtitle, theme = deck.get("title"), deck.get("subtitle"), deck.get("theme")
+    changed, applied = 0, 0
+
+    def pos(orig: int) -> int:
+        for k, it in enumerate(items):
+            if it[0] == orig:
+                return k
+        return -1
+
+    for op in ops[:30]:
+        if not isinstance(op, dict):
+            continue
+        kind = str(op.get("op") or "").lower()
+        try:
+            if kind == "replace":
+                k = pos(int(op.get("index")))
+                new = decks.normalize_slide(op.get("slide"))
+                if k < 0 or not new:
+                    continue
+                if k == 0 and new["layout"] != "title":
+                    continue
+                if json.dumps(items[k][1], sort_keys=True, ensure_ascii=False) != json.dumps(new, sort_keys=True, ensure_ascii=False):
+                    changed += 1
+                items[k][1] = new
+                applied += 1
+            elif kind == "insert":
+                after = int(op.get("after"))
+                new = decks.normalize_slide(op.get("slide"))
+                k = pos(after)
+                if not new or k < 0 or len(items) >= MAX_SLIDES + 8:
+                    continue
+                if items[k][1].get("layout") == "closing":      # yakunlovchi slayddan keyin emas, oldin
+                    k -= 1
+                items.insert(k + 1, [-len(items) - 1000, new])
+                changed += 1
+                applied += 1
+            elif kind == "delete":
+                k = pos(int(op.get("index")))
+                if k <= 0 or len(items) <= 2:
+                    continue
+                items.pop(k)
+                applied += 1
+            elif kind == "move":
+                a, b = pos(int(op.get("index"))), int(op.get("after"))
+                if a <= 0 or items[a][1].get("layout") == "closing":      # titul va yakunlovchi slayd joyidan qo'zg'almaydi
+                    continue
+                it = items.pop(a)
+                k = pos(b)
+                if k >= 0 and items[k][1].get("layout") == "closing":
+                    k -= 1
+                items.insert(k + 1 if k >= 0 else a, it)
+                applied += 1
+            elif kind == "meta":
+                if isinstance(op.get("title"), str) and op["title"].strip():
+                    title = decks.clean(op["title"], 90)
+                if isinstance(op.get("subtitle"), str):
+                    subtitle = decks.clean(op["subtitle"], 140)
+                th = str(op.get("theme") or "").strip().lower()
+                if th in decks.THEMES:
+                    theme = th
+                applied += 1
+        except (TypeError, ValueError):
+            continue
+    if not applied:
+        return None, 0
+    raw = {"title": title, "subtitle": subtitle, "theme": theme, "slides": [it[1] for it in items]}
+    new_deck = decks.normalize_deck(raw, len(items) + 2, str(title or ""))
+    return new_deck, changed
+
 
 _ai_client = None
 _ai_sig: Tuple[str, str] = ("", "")
@@ -618,33 +1082,44 @@ def _no_credit_text(mode: str, usage: Optional[dict]) -> str:
     )
 
 
+STEPS = ["Mavzu tahlili", "Slayd matnlari", "Rasmlar", "Fayllar (PPTX · PDF · HTML)"]
+HEADS = ["⏳ AI mavzuni tahlil qilmoqda…", "🧠 Slayd tuzilishi va matnlari yozilmoqda…", "🖼 Rasmlar tanlanmoqda…", "📦 Fayllar tayyorlanmoqda…"]
+
+
+def _steps(cur: int, extra: str = "") -> str:
+    lines = [("✅" if i < cur else ("⏳" if i == cur else "▫️")) + f" {t}" for i, t in enumerate(STEPS)]
+    return f"<b>{HEADS[cur]}</b>\n\n" + "\n".join(lines) + extra
+
+
 async def _run_generate(chat_id: int, user: dict, topic: str, n: int) -> None:
     st = _state(chat_id)
     st["busy"] = True
     msg_id: Optional[int] = None
     try:
         mode = st.get("mode", "fast")
+        sent = await _send(chat_id, _steps(0))
+        msg_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
+        await tg("sendChatAction", chat_id=chat_id, action="typing")
         uid, email = await _ensure_uid(user)
         usage = await asyncio.to_thread(_usage_now_sync, uid, email)
         if usage.get("blocked"):
-            await _send(chat_id, "⛔ Akkauntingiz bloklangan.")
+            await _edit(chat_id, msg_id, "⛔ Akkauntingiz bloklangan.")
             return
         afford = int(_deps["total_credits"](usage) // _page_units(mode))
         if afford < 1:
-            await _send(chat_id, _no_credit_text(mode, usage), kb_main())
+            await _edit(chat_id, msg_id, _no_credit_text(mode, usage), kb_main())
             return
         note = ""
         if n > afford:
             note = f"\n\nℹ️ Balansingizda {afford} varaq bor — shuncha slayd yaratiladi."
             n = max(1, afford)
         n = max(1, n)
-        sent = await _send(chat_id, f"⏳ <b>AI slaydlarni yozmoqda…</b>\n{n} ta slayd · {'🧠 Chuqur' if mode == 'deep' else '⚡ Tez'} AI"
-                                    + ("\n<i>Chuqur rejim 1–2 daqiqa olishi mumkin.</i>" if mode == "deep" else "") + note)
-        msg_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
-        await tg("sendChatAction", chat_id=chat_id, action="typing")
+        extra = f"\n\n{n} ta slayd · {'🧠 Chuqur' if mode == 'deep' else '⚡ Tez'} AI" + ("\n<i>Chuqur rejim 1–2 daqiqa olishi mumkin.</i>" if mode == "deep" else "") + note
+        await _edit(chat_id, msg_id, _steps(1, extra))
 
         async with _gen_sem:
             deck, tokens, tries = None, 0, 0
+            data: Optional[dict] = None
             prompt = f"User request:\n{topic}\n\nNumber of slides N = {n}"
             while tries < 2 and deck is None:
                 tries += 1
@@ -655,22 +1130,23 @@ async def _run_generate(chat_id: int, user: dict, topic: str, n: int) -> None:
                 await _edit(chat_id, msg_id, "⚠️ AI to'g'ri javob bermadi. Hech narsa yechilmadi — mavzuni qayta yuboring.")
                 return
             imgs_on = (data or {}).get("images", True) is not False
-            await _edit(chat_id, msg_id, f"🖼 <b>Rasmlar tanlanmoqda…</b>\n«{esc(deck['title'])}» — {len(deck['slides'])} ta slayd")
+            await _edit(chat_id, msg_id, _steps(2, f"\n\n«{esc(deck['title'])}» — {len(deck['slides'])} ta slayd"))
             await tg("sendChatAction", chat_id=chat_id, action="upload_photo")
             imgs = await _fetch_images(deck, {}, imgs_on)
 
         usage2, charged = await _charge(uid, email, len(deck["slides"]), tokens, mode, {"src": "telegram", "slides": len(deck["slides"]), "topic": topic[:80]})
-        st.update(deck=deck, imgs=imgs, topic=topic, awaiting=None, uid=uid, email=email, lang=_guess_lang(topic))
+        lang = _guess_lang(topic)
+        st.update(deck=deck, imgs=imgs, img_ts=time.time(), topic=topic, awaiting=None, uid=uid, email=email, lang=lang)
+        st["deck_id"] = await asyncio.to_thread(_deck_insert_sync, chat_id, uid, deck, topic, lang)      # faqat qisqa JSON matn
         left = _pages_left(usage2, mode)
         spent = charged / _page_units(mode)
-        text = (
-            f"✅ <b>{esc(deck['title'])}</b> tayyor!\n"
-            f"🎞 {len(deck['slides'])} ta slayd · 🎨 {esc(_theme_label(deck))}\n\n"
-            f"{_summary(deck)}\n\n"
-            f"💳 Sarflandi: <b>{_fmt_pages(spent)}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>{note}\n\n"
-            "<b>Qaysi formatda yuklab olasiz?</b>"
+        await _edit(chat_id, msg_id, _steps(3))
+        await _edit(
+            chat_id, msg_id,
+            f"✅ <b>{esc(deck['title'])}</b> tayyor!\n🎞 {len(deck['slides'])} ta slayd · 🎨 {esc(_theme_label(deck))}\n\n{_summary(deck)}\n\n"
+            f"💳 Sarflandi: <b>{_fmt_pages(spent)}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>{note}\n\n📦 Fayllar yuborilmoqda…",
         )
-        await _edit(chat_id, msg_id, text, kb_done(topic))
+        await _send_files(chat_id, "all")
     except asyncio.TimeoutError:
         await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring (yoki ⚡ Tez AI rejimini tanlang: /mode).")
     except RuntimeError as e:
@@ -704,7 +1180,10 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
     msg_id: Optional[int] = None
     try:
         mode = st.get("mode", "fast")
-        deck = st.get("deck")
+        if not st.get("deck") and not await _restore_deck(chat_id):
+            await _send(chat_id, "Avval slayd yarating — mavzuni yozing 🙂")
+            return
+        deck = st["deck"]
         uid, email = await _ensure_uid(user)
         usage = await asyncio.to_thread(_usage_now_sync, uid, email)
         if _deps["total_credits"](usage) < _deps["MODES"][mode]["chat"]:
@@ -714,38 +1193,48 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
         msg_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
         await tg("sendChatAction", chat_id=chat_id, action="typing")
         async with _gen_sem:
-            data, tokens = await _ai_json(EDIT_SYSTEM, f"CURRENT DECK:\n{_deck_for_prompt(deck)}\n\nNEW MESSAGE:\n{text}", mode)
-        intent = str((data or {}).get("intent") or "").lower()
+            data, tokens = await _ai_json(EDIT_SYSTEM, _edit_prompt(deck, text), mode)
+        data = data if isinstance(data, dict) else {}
+        intent = str(data.get("intent") or "").lower()
         if intent == "new_topic":
             await _edit(chat_id, msg_id, "🆕 Yangi mavzu deb tushundim.")
-            st.update(deck=None, imgs={}, awaiting=None, topic=text[:1500])
-            await _ask_count(chat_id, user, text)
+            st.update(deck=None, deck_id=None, imgs={}, awaiting=None, topic=text[:1500])
+            st["busy"] = False
+            await _run_generate(chat_id, user, text[:1500], _parse_count(text) or DEFAULT_SLIDES)
             return
-        if intent == "chat" or not isinstance(data, dict) or not isinstance(data.get("deck"), dict):
-            usage2, _ = await _charge(uid, email, 0, tokens, mode, {"src": "telegram", "kind": "chat"})
-            reply = decks.clean((data or {}).get("reply"), 800) or "Tushunmadim, iltimos aniqroq yozing — masalan: «3-slaydni qisqartir»."
+        has_change = isinstance(data.get("ops"), list) or isinstance(data.get("deck"), dict)
+        if intent == "chat" or not has_change:
+            await _charge(uid, email, 0, tokens, mode, {"src": "telegram", "kind": "chat"})
+            reply = decks.clean(data.get("reply"), 800) or "Tushunmadim, iltimos aniqroq yozing — masalan: «3-slaydni qisqartir»."
             await _edit(chat_id, msg_id, f"💬 {esc(reply)}", kb_done(st.get("topic", "")))
             return
-        new = decks.normalize_deck(data["deck"], len(deck["slides"]) + 8, deck.get("title", ""))
+        new, changed = None, 0
+        if isinstance(data.get("ops"), list):
+            new, changed = _apply_ops(deck, data["ops"])            # faqat kerakli slaydlar o'zgaradi
+        else:
+            new = decks.normalize_deck(data["deck"], len(deck["slides"]) + 8, deck.get("title", ""))
+            changed = _changed_slides(deck, new) if new else 0
         if not new:
             await _edit(chat_id, msg_id, "⚠️ O'zgartirishni qo'llab bo'lmadi. Hech narsa yechilmadi — boshqacha yozib ko'ring.", kb_done(st.get("topic", "")))
             return
-        changed = _changed_slides(deck, new)
         afford = int(_deps["total_credits"](usage) // _page_units(mode))
         if changed > afford:
-            await _edit(chat_id, msg_id, f"😔 Bu o'zgarish {changed} varaq talab qiladi, sizda {afford} varaq bor. Kichikroq o'zgarish so'rang yoki varaq oling.", kb_done(st.get("topic", "")))
+            await _edit(chat_id, msg_id, f"😔 Bu o'zgarish {changed} varaq talab qiladi, sizda {afford} varaq bor. Kichikroq o'zgarish so'rang yoki varaq oling.", kb_main())
             return
-        imgs = await _fetch_images(new, st.get("imgs") or {}, True)
         usage2, charged = await _charge(uid, email, changed, tokens, mode, {"src": "telegram", "kind": "edit", "changed": changed})
-        st.update(deck=new, imgs=imgs, awaiting=None)
+        st.update(deck=new, awaiting=None)
+        if st.get("deck_id"):
+            await asyncio.to_thread(_deck_update_sync, st["deck_id"], chat_id, new)
+        else:
+            st["deck_id"] = await asyncio.to_thread(_deck_insert_sync, chat_id, uid, new, st.get("topic", ""), st.get("lang", "uz"))
         reply = decks.clean(data.get("reply"), 500)
         left = _pages_left(usage2, mode)
         await _edit(
             chat_id, msg_id,
-            f"✅ <b>Yangilandi</b>" + (f" — {esc(reply)}" if reply else "") + f"\n🎞 {len(new['slides'])} ta slayd · 🎨 {esc(_theme_label(new))}\n\n{_summary(new)}\n\n"
-            f"💳 Sarflandi: <b>{_fmt_pages(charged / _page_units(mode))}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>\n\n<b>Yuklab olish:</b>",
-            kb_done(st.get("topic", "")),
+            "✅ <b>Yangilandi</b>" + (f" — {esc(reply)}" if reply else "") + f"\n🎞 {len(new['slides'])} ta slayd · 🎨 {esc(_theme_label(new))}\n\n{_summary(new)}\n\n"
+            f"💳 Sarflandi: <b>{_fmt_pages(charged / _page_units(mode))}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>\n\n📦 Yangi fayllar yuborilmoqda…",
         )
+        await _send_files(chat_id, "all")
     except asyncio.TimeoutError:
         await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring.", kb_done(st.get("topic", "")))
     except Exception as e:
@@ -755,39 +1244,48 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
         st["busy"] = False
 
 
-async def _send_files(chat_id: int, fmt: str) -> None:
+async def _send_files(chat_id: int, fmt: str) -> bool:
+    """Fayllar FAQAT RAM'da yasaladi, Telegram'ga yuboriladi va darhol tashlab yuboriladi (diskka yozilmaydi)."""
     st = _state(chat_id)
-    deck = st.get("deck")
-    if not deck:
-        await _send(chat_id, "Bu taqdimot eskirgan (bot qayta ishga tushgan bo'lishi mumkin). Mavzuni qayta yozing 🙂")
-        return
+    if not st.get("deck") and not await _restore_deck(chat_id):
+        await _send(chat_id, "Slayd topilmadi (bot qayta ishga tushgan bo'lishi mumkin). Mavzuni yozing — yangisini yarataman 🙂")
+        return False
     if st.get("sending"):
-        return
+        return False
+    deck = st["deck"]
     st["sending"] = True
+    files: Optional[list] = None
+    ok_all = False
     try:
         await tg("sendChatAction", chat_id=chat_id, action="upload_document")
-        imgs = _img_index(deck, st.get("imgs") or {})
+        imgs_q = await _fetch_images(deck, st.get("imgs") or {}, True)          # faqat yetishmayotgan rasmlar
+        st["imgs"], st["img_ts"] = imgs_q, time.time()
         lang = st.get("lang", "uz")
         if fmt == "all":
-            files = await asyncio.to_thread(decks.export_all, deck, imgs, lang)
+            files = await asyncio.to_thread(decks.export_all, deck, _img_index(deck, imgs_q), lang)
         else:
-            files = [await asyncio.to_thread(decks.export, deck, imgs, fmt, lang)]
-        ok_all = True
-        for i, (name, data, mime) in enumerate(files):
-            cap = f"📦 <b>{esc(deck['title'])}</b>" if (i == 0 and fmt == "all") else (f"<b>{esc(deck['title'])}</b>" if len(files) == 1 else "")
-            if fmt != "all" and name.endswith(".html"):
+            files = [await asyncio.to_thread(decks.export, deck, _img_index(deck, imgs_q), fmt, lang)]
+        total, ok_all, first = len(files), True, True
+        while files:
+            name, data, mime = files.pop(0)                                     # yuborilgach RAM'dan bo'shaydi
+            cap = f"📦 <b>{esc(deck['title'])}</b>" if (first and fmt == "all") else (f"<b>{esc(deck['title'])}</b>" if total == 1 else "")
+            if name.endswith(".html") and fmt != "all":
                 cap += "\n<i>Brauzerda oching: ← → tugmalar yoki barmoq bilan suring, F — to'liq ekran.</i>"
-            ok = await tg_send_document(chat_id, name, data, mime, cap)
-            ok_all = ok_all and ok
-        if not ok_all:
-            await _send(chat_id, "⚠️ Faylni yuborib bo'lmadi. Qayta urinib ko'ring.")
+            ok_all = (await tg_send_document(chat_id, name, data, mime, cap)) and ok_all
+            first, data = False, None
+        if ok_all:
+            await _send(chat_id, "✅ Tayyor! Yana format kerakmi yoki o'zgartirish qilamizmi?\n<i>Masalan: «3-slaydni qisqartir», «sarlavhasini o'zgartir».</i>", kb_done(st.get("topic", "")))
         else:
-            await _send(chat_id, "Yana format kerakmi yoki o'zgartirish qilamizmi?", kb_done(st.get("topic", "")))
+            await _send(chat_id, "⚠️ Faylni yuborib bo'lmadi. Qayta urinib ko'ring.", kb_done(st.get("topic", "")))
     except Exception as e:
         _warn("files", f"fayl yig'ish xatosi: {type(e).__name__}: {str(e)[:160]}")
-        await _send(chat_id, "⚠️ Faylni tayyorlashda xatolik. Qayta urinib ko'ring.")
+        await _send(chat_id, "⚠️ Faylni tayyorlashda xatolik. Qayta urinib ko'ring.", kb_done(st.get("topic", "")))
     finally:
+        files = None
+        st["imgs"] = {}                                                         # rasmlar ham RAM'dan tozalanadi
         st["sending"] = False
+        gc.collect()
+    return ok_all
 
 
 async def _ask_count(chat_id: int, user: dict, topic: str) -> None:
@@ -812,6 +1310,85 @@ async def _ask_count(chat_id: int, user: dict, topic: str) -> None:
 # ----------------------------------------------------------------------------------------------
 # Update ishlovi
 # ----------------------------------------------------------------------------------------------
+async def _show_my(cid: int) -> None:
+    rows = await asyncio.to_thread(_deck_list_sync, cid)
+    if not rows:
+        await _send(cid, "📂 Saqlangan slaydlar yo'q.\nMavzuni yozing — yangisini yarataman 🎨")
+        return
+    kb = [[_btn(f"📂 {decks.clean(r.get('title') or 'Slayd', 40)}", f"open:{r['id']}")] for r in rows]
+    kb.append([_btn("🗑 Hammasini tozalash", "clr")])
+    await _send(cid, f"📂 <b>Slaydlarim</b> (oxirgi {len(rows)} ta, faqat matn saqlanadi)\nOchish uchun tanlang:", {"inline_keyboard": kb})
+
+
+async def _ask_clear(cid: int) -> None:
+    await _send(cid, "🗑 <b>Barcha slaydlaringiz tarixi o'chiriladi.</b>\nBalans va akkaunt saqlanib qoladi. Davom etamizmi?",
+                {"inline_keyboard": [[_btn("🗑 Ha, tozalash", "clr_yes"), _btn("↩️ Bekor", "clr_no")]]})
+
+
+async def _do_clear(cid: int) -> None:
+    n = await asyncio.to_thread(_deck_clear_sync, cid)
+    st = _state(cid)
+    st.update(deck=None, deck_id=None, imgs={}, awaiting=None, topic=None, sending=False)
+    gc.collect()
+    await _send(cid, f"✅ Tozalandi: <b>{n}</b> ta saqlangan slayd o'chirildi.\n💳 Balansingiz va akkauntingiz joyida.")
+
+
+async def _show_balance(cid: int, user: dict) -> None:
+    i = await _balance_info(user)
+    await _send(cid, await _credits_text(user), kb_balance(bool(i and i["linked"])))
+
+
+async def _do_buy(cid: int, user: dict) -> None:
+    try:
+        uid, email = await _ensure_uid(user)
+        fn = _deps.get("checkout")
+        res = await fn(uid, "" if email.endswith("@" + TG_EMAIL_DOMAIN) else email, SITE_URL) if fn else {"error": "no_checkout"}
+    except Exception as e:
+        _warn("buy", f"checkout xatosi: {str(e)[:120]}")
+        res = {"error": "x"}
+    if res.get("url"):
+        info = f"💎 {res.get('pages')} varaq" + (f" — ${res.get('price')}" if res.get("price") else "")
+        await _send(cid, f"💎 <b>Varaq sotib olish</b>\n{info}\n\nTo'lovdan so'ng balansingiz bu yerda va saytda darhol yangilanadi.",
+                    {"inline_keyboard": [[{"text": "💳 To'lovga o'tish", "url": res["url"]}]]})
+    else:
+        await _send(cid, "⚙️ To'lov tizimi hozircha ishlamayapti. Birozdan keyin urinib ko'ring yoki saytdan sotib oling.", kb_main())
+
+
+async def _link_help(cid: int) -> None:
+    await _send(
+        cid,
+        "🔗 <b>Sayt akkauntini ulash</b>\n\n1️⃣ Saytni oching va Google bilan kiring\n2️⃣ Balans panelidagi <b>«✈️ Telegram»</b> tugmasini bosing\n"
+        "3️⃣ Chiqqan kodni shu yerga yuboring: <code>/link KOD</code>\n\nUlangach botdagi va saytdagi balans <b>bir xil</b> bo'ladi.",
+        {"inline_keyboard": [[{"text": "🌐 Saytni ochish", "url": SITE_URL}]]},
+    )
+
+
+async def _do_link(cid: int, user: dict, code: str) -> None:
+    res = await asyncio.to_thread(_link_consume_sync, user, code)
+    if res.get("ok"):
+        extra = f"\n💎 Botdagi {_fmt_pages(res['moved_pages'])} pullik varaq sayt akkauntingizga ko'chirildi." if res.get("moved_pages") else ""
+        await _send(cid, f"✅ <b>Ulandi!</b> Sayt akkauntingiz ({esc(_mask_email(res['email']))}) bilan balans endi <b>bir xil</b>.{extra}", kb_main())
+    elif res.get("error") == "db":
+        await _send(cid, "⚙️ Ulashni hozir bajarib bo'lmadi (baza sozlanmagan). Keyinroq urinib ko'ring.")
+    else:
+        await _send(cid, "❌ Kod noto'g'ri yoki eskirgan (10 daqiqa yashaydi). Saytda «✈️ Telegram» tugmasini bosib yangi kod oling.")
+
+
+async def _menu_action(cid: int, user: dict, action: str) -> None:
+    st = _state(cid)
+    if action == "new":
+        st.update(deck=None, deck_id=None, imgs={}, awaiting="topic", topic=None)
+        await _send(cid, "🎨 <b>Slayd mavzusini yozing</b>, masalan:\n<i>«Sun'iy intellekt va uning kelajagi»</i>\n\n"
+                         "Xohlasangiz batafsil yozing: <i>«10 ta slayd, tibbiyotda SI, yashil rang, rasmsiz»</i>.\n"
+                         f"Yozishingiz bilan AI tayyorlab, <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi. (Odatda {DEFAULT_SLIDES} ta slayd)")
+    elif action == "my":
+        await _show_my(cid)
+    elif action == "bal":
+        await _show_balance(cid, user)
+    elif action == "site":
+        await _send(cid, f"🌐 <b>Slide Studio</b> — to'liq muharrir (Mini App)\n{esc(SITE_URL)}", kb_main())
+
+
 async def _handle_callback(cb: dict) -> None:
     cid = (cb.get("message") or {}).get("chat", {}).get("id")
     mid = (cb.get("message") or {}).get("message_id")
@@ -821,13 +1398,37 @@ async def _handle_callback(cb: dict) -> None:
     if not isinstance(cid, int) or not isinstance(user.get("id"), int) or _limited(cid, 14):
         return
     st = _state(cid)
-    if data == "credits":
-        await _send(cid, await _credits_text(user), kb_main())
+    if data in ("credits", "bal"):
+        await _show_balance(cid, user)
+    elif data == "buy":
+        await _do_buy(cid, user)
+    elif data == "linkinfo":
+        await _link_help(cid)
+    elif data == "my":
+        await _show_my(cid)
+    elif data == "clr":
+        await _ask_clear(cid)
+    elif data == "clr_yes":
+        await _do_clear(cid)
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+    elif data == "clr_no":
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+        await _send(cid, "↩️ Bekor qilindi. Hech narsa o'chirilmadi.")
+    elif data.startswith("open:"):
+        try:
+            did = int(data.split(":", 1)[1])
+        except Exception:
+            return
+        if await _restore_deck(cid, did):
+            d = st["deck"]
+            await _send(cid, f"📂 <b>{esc(d['title'])}</b> ochildi\n🎞 {len(d['slides'])} ta slayd · 🎨 {esc(_theme_label(d))}\n\n{_summary(d)}\n\n<b>Yuklab oling yoki matn bilan tahrirlang:</b>", kb_done(st.get("topic", "")))
+        else:
+            await _send(cid, "Bu slayd topilmadi (o'chirilgan bo'lishi mumkin).")
     elif data.startswith("mode:"):
         st["mode"] = "deep" if data.endswith("deep") else "fast"
         if st.get("topic"):
             await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_count(st["mode"]))
-    elif data.startswith("cnt:"):
+    elif data.startswith("cnt:"):                         # eski xabarlardagi tugmalar uchun
         if st.get("busy"):
             await _send(cid, "⏳ Oldingi so'rov bajarilmoqda, biroz kuting.")
             return
@@ -838,7 +1439,7 @@ async def _handle_callback(cb: dict) -> None:
         try:
             n = max(MIN_SLIDES, min(MAX_SLIDES, int(data.split(":")[1])))
         except Exception:
-            n = 8
+            n = DEFAULT_SLIDES
         await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
         _spawn(_run_generate(cid, user, topic, n))
     elif data.startswith("dl:"):
@@ -846,13 +1447,13 @@ async def _handle_callback(cb: dict) -> None:
         if fmt in ("pptx", "pdf", "html", "all"):
             _spawn(_send_files(cid, fmt))
     elif data == "edit":
-        if not st.get("deck"):
-            await _send(cid, "Avval taqdimot yarating — mavzuni yozing 🙂")
+        if not st.get("deck") and not await _restore_deck(cid):
+            await _send(cid, "Avval slayd yarating — mavzuni yozing 🙂")
             return
         st["awaiting"] = "edit"
         await _send(cid, "✏️ <b>Nimani o'zgartiray?</b> Oddiy matn bilan yozing, masalan:\n"
-                         "• <i>3-slaydni qisqartir</i>\n• <i>yana 2 ta slayd qo'sh: xavflar va xulosa</i>\n• <i>ruscha tarjima qil</i>\n• <i>ranglarni yashil qil</i>\n\n"
-                         "<i>Narx: o'zgargan slaydlar soni (kamida bitta savol-javob).</i>")
+                         "• <i>3-slaydni qisqartir</i>\n• <i>sarlavhasini o'zgartir: «Yangi nom»</i>\n• <i>yana 2 ta slayd qo'sh: xavflar va xulosa</i>\n• <i>ruscha tarjima qil</i>\n• <i>ranglarni yashil qil</i>\n\n"
+                         "<i>Faqat kerakli slaydlar o'zgaradi (butun taqdimot qayta yozilmaydi). Narx: o'zgargan slaydlar soni.</i>")
     elif data == "theme":
         if st.get("deck"):
             await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_themes())
@@ -862,31 +1463,45 @@ async def _handle_callback(cb: dict) -> None:
         name = data[3:]
         if st.get("deck") and decks and name in decks.THEMES:
             st["deck"]["theme"] = name
+            if st.get("deck_id"):
+                await asyncio.to_thread(_deck_update_sync, st["deck_id"], cid, st["deck"])
             await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_done(st.get("topic", "")))
             await _send(cid, f"🎨 Rang: <b>{esc(decks.THEMES[name]['label'])}</b> (bepul). Endi yuklab oling 👇", kb_done(st.get("topic", "")))
     elif data == "new":
-        st.update(deck=None, imgs={}, awaiting=None, topic=None)
-        await _send(cid, "🆕 Yangi taqdimot uchun mavzuni yozing.")
+        await _menu_action(cid, user, "new")
 
 
 async def _handle_text(chat_id: int, user: dict, text: str) -> None:
     st = _state(chat_id)
+    act = MENU.get(text.strip())
+    if act:
+        await _menu_action(chat_id, user, act)
+        return
     if st.get("busy"):
         await _send(chat_id, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
         return
     if GREETING_RE.match(text):
-        await _send(chat_id, WELCOME, kb_main())
+        await _send_welcome(chat_id, user)
         return
-    if st.get("deck"):
-        _spawn(_run_edit(chat_id, user, text[:1500]))          # AI o'zi aniqlaydi: tahrir / yangi mavzu / savol
+    if st.get("awaiting") == "topic":                      # «🎨 Yangi slayd» bosilgan — bu xabar mavzu
+        topic = " ".join(text.split())[:1500]
+        st.update(awaiting=None, topic=topic)
+        _spawn(_run_generate(chat_id, user, topic, _parse_count(topic) or DEFAULT_SLIDES))
+        return
+    if st.get("deck") or await _restore_deck(chat_id):     # AI o'zi aniqlaydi: tahrir / yangi mavzu / savol
+        _spawn(_run_edit(chat_id, user, text[:1500]))
         return
     topic = " ".join(text.split())[:1500]
-    n = _parse_count(topic)
-    if n:
-        st["topic"] = topic
-        _spawn(_run_generate(chat_id, user, topic, n))
-    else:
-        await _ask_count(chat_id, user, topic)
+    st["topic"] = topic
+    _spawn(_run_generate(chat_id, user, topic, _parse_count(topic) or DEFAULT_SLIDES))   # mavzu yozildi — darhol tayyorlaymiz
+
+
+async def _send_welcome(chat_id: int, user: dict) -> None:
+    try:
+        info = await asyncio.wait_for(_balance_info(user), timeout=6)
+    except Exception:
+        info = None
+    await _send(chat_id, _welcome_text(user.get("first_name") or "", info), kb_reply())
 
 
 async def handle_update(data: dict) -> None:
@@ -910,30 +1525,46 @@ async def handle_update(data: dict) -> None:
 
     text = (msg.get("text") or "").strip()
     if not text:
-        await _send(chat_id, "Mavzuni <b>matn</b> ko'rinishida yozib yuboring, masalan: <i>«Sun'iy intellekt kelajagi»</i>.", kb_main())
+        await _send(chat_id, "Mavzuni <b>matn</b> ko'rinishida yozib yuboring, masalan: <i>«Sun'iy intellekt kelajagi»</i>.", kb_reply())
         return
 
     if text.startswith("/"):
-        cmd = text.split()[0].split("@")[0].lower()
+        parts = text.split(maxsplit=1)
+        cmd = parts[0].split("@")[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
         st = _state(chat_id)
         if cmd == "/start":
-            await _send(chat_id, WELCOME, kb_main())
-            _spawn(_warm_account(user))                       # akkaunt/kredit qatorini fonda tayyorlaydi (javobni kechiktirmaydi)
+            if arg.lower().startswith("link_"):               # saytdagi «Telegram» tugmasidan: t.me/bot?start=link_KOD
+                await _do_link(chat_id, user, arg[5:])
+            await _send_welcome(chat_id, user)
         elif cmd == "/help":
-            await _send(chat_id, HELP, kb_main())
+            await _send(chat_id, HELP, kb_reply())
         elif cmd == "/new":
-            st.update(deck=None, imgs={}, awaiting=None, topic=None)
-            await _send(chat_id, "🆕 Yangi taqdimot uchun mavzuni yozing.")
+            await _menu_action(chat_id, user, "new")
+        elif cmd in ("/my", "/slides"):
+            await _show_my(chat_id)
+        elif cmd in ("/clear", "/tozalash"):
+            await _ask_clear(chat_id)
         elif cmd == "/mode":
             st["mode"] = "deep" if st.get("mode") != "deep" else "fast"
             await _send(chat_id, f"Rejim: <b>{'🧠 Chuqur AI' if st['mode'] == 'deep' else '⚡ Tez AI'}</b>\n"
                                  f"<i>{'Murakkab mavzular uchun, 1 slayd = 3 varaq, sekinroq.' if st['mode'] == 'deep' else 'Tez va tejamkor: 1 slayd = 1 varaq.'}</i>")
-        elif cmd in ("/credits", "/kredit", "/kreditlar", "/balance"):
-            await _send(chat_id, await _credits_text(user), kb_main())
+        elif cmd in ("/credits", "/kredit", "/kreditlar", "/balance", "/balans"):
+            await _show_balance(chat_id, user)
+        elif cmd == "/buy":
+            await _do_buy(chat_id, user)
+        elif cmd == "/link":
+            if arg:
+                await _do_link(chat_id, user, arg)
+            else:
+                await _link_help(chat_id)
+        elif cmd == "/unlink":
+            ok = await asyncio.to_thread(_unlink_sync, user["id"])
+            await _send(chat_id, "🔓 Sayt akkaunti uzildi. Bot endi o'zining Telegram akkauntidan foydalanadi." if ok else "⚙️ Hozir bajarib bo'lmadi.")
         elif cmd == "/site":
-            await _send(chat_id, f"🌐 {esc(SITE_URL)}", kb_main())
+            await _menu_action(chat_id, user, "site")
         else:
-            await _send(chat_id, HELP, kb_main())
+            await _send(chat_id, HELP, kb_reply())
         return
 
     await _handle_text(chat_id, user, text)
@@ -1015,12 +1646,80 @@ def verify_init_data(init_data: str, max_age: int = 86400) -> Optional[dict]:
 
 
 def _login_sync(user: dict) -> dict:
+    """Mini App kirishi. Telegram sayt akkauntiga ulangan bo'lsa — SHU akkaunt sessiyasi (balans bir xil)."""
+    tid = int(user["id"])
+    linked = _linked_sync(tid)
+    if linked:
+        _uid, email = linked
+        try:
+            link = _sb().auth.admin.generate_link({"type": "magiclink", "email": email})
+            hashed = getattr(getattr(link, "properties", None), "hashed_token", None)
+            if hashed:
+                return {"token_hash": hashed, "type": "magiclink", "email": email, "name": ""}
+        except Exception as e:
+            _warn("login-linked", f"ulangan akkaunt bilan kirib bo'lmadi, Telegram akkauntiga o'tildi: {str(e)[:120]}")
     r = _provision_sync(user)
     if r.get("error"):
         return {"error": r["error"]}
     if not r.get("hashed"):
         return {"error": "auth_unavailable"}
     return {"token_hash": r["hashed"], "type": "magiclink", "email": r["email"], "name": r["name"]}
+
+
+async def _web_user(request: Request) -> Optional[Tuple[str, str]]:
+    """Sayt sessiyasi (Supabase access token) -> (user_id, email) yoki None."""
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    token = str((body or {}).get("token") or "").strip()
+    sb = _sb()
+    if not token or token == "dev-token" or not sb:
+        return None
+    try:
+        res = await asyncio.to_thread(sb.auth.get_user, token)
+        if res and res.user:
+            return str(res.user.id), str(res.user.email or "")
+    except Exception:
+        pass
+    return None
+
+
+@router.post("/api/telegram/link-code")
+async def telegram_link_code(request: Request):
+    """Saytdagi «✈️ Telegram» tugmasi: bir martalik kod (10 daqiqa) + botni ochish havolasi."""
+    if not ENABLED:
+        return JSONResponse({"error": "telegram_disabled"}, status_code=503)
+    me = await _web_user(request)
+    if not me or not me[1]:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+    if me[1].endswith("@" + TG_EMAIL_DOMAIN):
+        return JSONResponse({"error": "already_telegram"}, status_code=400)
+    try:
+        code = await asyncio.to_thread(_link_code_sync, me[0], me[1])
+    except Exception as e:
+        _db_warn(e)
+        return JSONResponse({"error": "db_not_ready"}, status_code=503)
+    uname = await _bot_username()
+    return JSONResponse({"code": code, "bot": uname, "expires_in": LINK_TTL,
+                         "url": f"https://t.me/{uname}?start=link_{code}" if uname else ""}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/telegram/link-status")
+async def telegram_link_status(request: Request):
+    if not ENABLED:
+        return JSONResponse({"linked": False, "enabled": False})
+    me = await _web_user(request)
+    if not me:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+    linked = False
+    try:
+        sb = _sb()
+        r = await asyncio.to_thread(lambda: sb.table("tg_links").select("tg_id").eq("user_id", me[0]).limit(1).execute())
+        linked = bool(r.data)
+    except Exception:
+        pass
+    return JSONResponse({"linked": linked, "enabled": True}, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/telegram/auth")
@@ -1054,10 +1753,12 @@ ALLOWED = ["message", "callback_query"]
 async def _set_commands() -> None:
     await tg("setMyCommands", commands=[
         {"command": "start", "description": "Bosh menyu"},
-        {"command": "new", "description": "Yangi taqdimot"},
+        {"command": "new", "description": "Yangi slayd yaratish"},
+        {"command": "my", "description": "Slaydlarim"},
+        {"command": "clear", "description": "Slaydlarimni tozalash"},
+        {"command": "credits", "description": "Balans / to'ldirish"},
+        {"command": "link", "description": "Sayt akkauntini ulash"},
         {"command": "mode", "description": "Tez ⚡ / Chuqur 🧠 AI"},
-        {"command": "credits", "description": "Kreditlarim (balans)"},
-        {"command": "site", "description": "Saytga havola"},
         {"command": "help", "description": "Yordam"},
     ])
     await tg("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 Muharrir", "web_app": {"url": _app_url()}})

@@ -829,6 +829,7 @@ try:
         ledger_log=lambda *a, **k: ledger_log(*a, **k),   # v44.1: ledger_log pastroqda e'lon qilingan -> kech bog'lanadi (NameError tuzatildi)
         total_credits=total_credits,
         MODES=MODES,
+        checkout=lambda *a, **k: _checkout_for_bot(*a, **k),   # v45: botdan to'lov havolasi (kech bog'lanadi — NameError bo'lmasin)
         ai=lambda: {
             "api_key": (config.get("api_key") or "").strip(),
             "base_url": config.get("deepseek_base_url") or "https://api.deepseek.com",
@@ -1072,15 +1073,20 @@ async def create_lemon_checkout(payload: Dict[str, Any] = None):
         return JSONResponse({"error": "Sessiya tugagan. Qayta kiring."}, status_code=401)
     user_id = user_res.user.id
     user_email = (user_res.user.email or payload.get("email") or "").strip()
+    code, data = await _build_checkout(user_id, user_email, str(payload.get("return_url") or ""))
+    return data if code == 200 else JSONResponse(data, status_code=code)
 
+
+async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
+    """v45: sayt VA Telegram bot uchun umumiy checkout yaratish. (http_status, dict) qaytaradi."""
     ls = _ls_env()
     if not ls["api_key"] or not ls["store_id"] or not ls["variant_id"]:
-        return JSONResponse({
+        return 503, {
             "error": "Lemon Squeezy sozlanmagan",
             "hint": ".env ga LEMON_SQUEEZY_API_KEY, LEMON_SQUEEZY_STORE_ID, LEMON_SQUEEZY_VARIANT_ID yozing",
-        }, status_code=503)
+        }
 
-    return_url = ls["base_url"] or str(payload.get("return_url") or "").strip().rstrip("/")
+    return_url = ls["base_url"] or str(return_url_hint or "").strip().rstrip("/")
     if return_url and not return_url.startswith(("http://", "https://")):
         return_url = ""
     checkout_data: Dict[str, Any] = {"custom": {"user_id": str(user_id)}}
@@ -1113,12 +1119,12 @@ async def create_lemon_checkout(payload: Dict[str, Any] = None):
     try:
         res = await asyncio.to_thread(_ls_post_checkout, ls["api_key"], body)
     except Exception as e:
-        return JSONResponse({"error": f"Lemon Squeezy ga ulanib bo'lmadi: {str(e)[:200]}"}, status_code=502)
+        return 502, {"error": f"Lemon Squeezy ga ulanib bo'lmadi: {str(e)[:200]}"}
     if "json" in res:
         url = ((res["json"].get("data") or {}).get("attributes") or {}).get("url")
         if url:
-            return {"checkout_url": url, "pages": PAGES_PER_PACK, "price_usd": CHECKOUT_PRICE_USD}
-        return JSONResponse({"error": "Lemon Squeezy checkout URL qaytarmadi"}, status_code=502)
+            return 200, {"checkout_url": url, "pages": PAGES_PER_PACK, "price_usd": CHECKOUT_PRICE_USD}
+        return 502, {"error": "Lemon Squeezy checkout URL qaytarmadi"}
     code = res.get("status")
     print(f"[LEMON CHECKOUT] HTTP {code}: {res.get('error_body')}")
     if code == 404:
@@ -1129,7 +1135,15 @@ async def create_lemon_checkout(payload: Dict[str, Any] = None):
         msg = "Lemon Squeezy so'rovni qabul qilmadi (422)."
     else:
         msg = f"Lemon Squeezy xatosi (HTTP {code})."
-    return JSONResponse({"error": msg, "ls_status": code, "detail": res.get("error_body", "")[:300]}, status_code=502)
+    return 502, {"error": msg, "ls_status": code, "detail": res.get("error_body", "")[:300]}
+
+
+async def _checkout_for_bot(user_id: str, email: str = "", return_url: str = "") -> dict:
+    """v45: Telegram bot «To'ldirish» tugmasi uchun. {'url','pages','price'} yoki {'error'}."""
+    code, data = await _build_checkout(user_id, (email or "").strip(), return_url)
+    if code == 200:
+        return {"url": data["checkout_url"], "pages": data.get("pages"), "price": data.get("price_usd")}
+    return {"error": data.get("error") or "checkout_error"}
 
 _processed_orders: set = set()
 
@@ -1236,6 +1250,10 @@ async def lemon_webhook(request: Request):
                 ledger_log, user_id, "refund" if event_name == "order_refunded" else "purchase",
                 -pages * UNIT if event_name == "order_refunded" else pages * UNIT, u, 0, {"order": order_id})
         print(f"[LEMON WEBHOOK] {event_name}: {'-' if event_name == 'order_refunded' else '+'}{pages} → {user_id} (test={attrs.get('test_mode')})")
+        try:   # v45: Telegram foydalanuvchisiga darhol xabar (balans bazada allaqachon yangilangan)
+            asyncio.create_task(tgbot.notify_purchase(str(user_id), pages, event_name == "order_refunded"))
+        except Exception:
+            pass
         return {"ok": True, "user_id": user_id, "paid_credits": u.get("paid_credits"), "pages": pages}
     except Exception as e:
         _release_order(key)

@@ -1,8 +1,8 @@
 .env
-.venv/
-__pycache__/
-*.pyc
-*.log
-config.json
 .env.*
 !.env.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.zip
