@@ -33,3 +33,10 @@ Jadvallar yaratilmasa ham bot ishlaydi — faqat slaydlar tarixi restartda yo'qo
 
 ## Fayllar
 `backend/telegram_bot.py` (asosiy), `main.py` (to'lov: `_build_checkout`, webhook -> `notify_purchase`), `js/35_v45_tglink.js` (+ `index.html`), `SUPABASE_TELEGRAM.sql`, `.gitignore`.
+
+## v45.1 — qo'shimchalar
+- **Slaydlar yo'qolib qolmasin (sayt):** «qaytadan qil» deyilganda AI `reset_deck` berib slaydlarni 1 taga tushirar, varaq yetmasa qaytib to'ldirolmasdi. Endi: varaq <2 bo'lsa `reset_deck` bajarilmaydi; slaydlar keskin kamaysa «↩️ Oldingi holatni qaytarish» oynasi chiqadi (`js/37_v45_deck_guard.js`, AI'dan oldingi nusxa asosida).
+- **Telefonda balans oynasi** chap chetdan chiqib ketmasligi tuzatildi (`js/11_monitoring.js`).
+- **Google ↔ Telegram ulash — 1 bosish:** Sozlamalar → «Telegram botni ulash» yoki balans oynasidagi «✈️ Telegram botni ulash» → Telegram ochiladi → Start. Botdan ham: «🔗 Sayt akkauntini ulash» → «Saytda ulash» → Google bilan kirish → o'zi ulanadi. (Avvalgi tugma yashirin panelda qolib ketgan edi.)
+- **Botdagi «🚀 Muharrirda ochish» / «🌐 Brauzerda»** endi AYNAN shu slaydni muharrirga ochadi (server bazadagi JSON'dan PPTX'ni RAM'da yasaydi, sayt `importPptxClient` bilan import qiladi).
+- **Botga .pptx yuborish:** matn o'qiladi (bepul), keyin matn bilan tahrirlanadi, yangi PPTX/PDF/HTML qaytadi. Asl dizayn/rasm o'qilmaydi.

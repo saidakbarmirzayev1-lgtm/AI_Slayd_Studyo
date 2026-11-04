@@ -116,12 +116,18 @@
       pop.style.cssText = 'position:fixed;z-index:2147483000';   // v42: CSS keshda eski qolsa ham doim eng ustda
       const r = b.getBoundingClientRect();
       pop.style.top = (r.bottom + 8) + 'px';
-      pop.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-      pop.innerHTML = metersHTML() + '<button type="button" class="ss-set-btn" id="ssQuotaBuy" style="margin-top:10px;width:100%">' + buyLabel() + '</button>';
+      pop.innerHTML = metersHTML() + '<button type="button" class="ss-set-btn" id="ssQuotaBuy" style="margin-top:10px;width:100%">' + buyLabel() + '</button>' +
+        (window.ssTgLink && isLoggedIn() ? '<button type="button" class="ss-set-btn" id="ssQuotaTg" style="margin-top:8px;width:100%">✈️ Telegram botni ulash</button>' : '');
       document.body.appendChild(pop);
+      // v45: oyna HECH QACHON ekrandan chiqmaydi (telefonda chap chetga ketib qolardi): chap/o'ng chegaraga qisiladi
+      const pw = pop.offsetWidth || 280, vw = document.documentElement.clientWidth || window.innerWidth;
+      pop.style.right = 'auto';
+      pop.style.left = Math.max(8, Math.min(r.right - pw, vw - pw - 8)) + 'px';
       animateMeters(pop);
       pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
       pop.querySelector('#ssQuotaBuy').onclick = function () { pop.remove(); startCheckout(); };
+      const tgb = pop.querySelector('#ssQuotaTg');
+      if (tgb) tgb.onclick = function () { pop.remove(); try { window.ssTgLink(); } catch (_) {} };
     });
     document.addEventListener('click', function () { const p = document.getElementById('ssQuotaPop'); if (p) p.remove(); });
     return b;

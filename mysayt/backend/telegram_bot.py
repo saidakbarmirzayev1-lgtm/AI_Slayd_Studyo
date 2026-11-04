@@ -18,6 +18,7 @@ import gc
 import hashlib
 import hmac
 import html
+import io
 import json
 import os
 import re
@@ -31,7 +32,7 @@ from urllib.parse import parse_qsl, quote
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 try:
     from backend import tg_decks as decks
@@ -171,6 +172,7 @@ HELP = (
     "Mavzuni oddiy xabar qilib yozing — AI darhol <b>PPTX + PDF + HTML</b> tayyorlab yuboradi. "
     "Slayd soni, rang, rasm haqida ham yozishingiz mumkin: <i>«10 ta slayd, tibbiyotda SI, yashil rang»</i>.\n"
     "Tayyor slaydni matn bilan tahrirlang: <i>«3-slaydni qisqartir»</i>, <i>«sarlavhasini o'zgartir»</i>.\n"
+    "📎 Tayyor <b>.pptx</b> faylingizni yuboring — AI matnini tahrirlab beradi.\n"
     "Narx: <b>1 slayd = 1 varaq</b> (Chuqur AI — 3 baravar). Kuniga bepul varaqlar beriladi."
 )
 GREETING_RE = re.compile(r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalay|nima gap|start|boshla)[\s!.,?]*$", re.I)
@@ -210,13 +212,23 @@ def kb_count(mode: str) -> dict:
     ]}
 
 
-def kb_done(topic: str = "") -> dict:
+def _editor_url(st: dict) -> str:
+    """Mini App / brauzer havolasi: shu slaydning o'zini muharrirga ochadi (token bilan; fayl serverda saqlanmaydi)."""
+    did, cid = st.get("deck_id"), st.get("cid")
+    if did and cid:
+        return f"{SITE_URL}/?src=tg&tgdeck={_make_token('D', did, cid, 3 * 86400)}"
+    return _app_url(st.get("topic") or "")
+
+
+def kb_done(arg: Any = "") -> dict:
+    st = arg if isinstance(arg, dict) else {"topic": arg}
+    url = _editor_url(st)
     return {"inline_keyboard": [
         [_btn("📊 PPTX", "dl:pptx"), _btn("📕 PDF", "dl:pdf"), _btn("🌐 HTML", "dl:html")],
         [_btn("📦 Hammasi — 3 ta fayl birdan", "dl:all")],
         [_btn("✏️ Tahrirlash", "edit"), _btn("🎨 Rang", "theme")],
         [_btn("🆕 Yangi slayd", "new"), _btn("📂 Slaydlarim", "my")],
-        [{"text": "🚀 Muharrirda ochish (sayt)", "web_app": {"url": _app_url(topic)}}],
+        [{"text": "🚀 Muharrirda ochish", "web_app": {"url": url}}, {"text": "🌐 Brauzerda", "url": url}],
     ]}
 
 
@@ -303,6 +315,7 @@ def _state(chat_id: int) -> dict:
     if st is None or now - st.get("ts", 0) > CHAT_TTL:
         st = {"mode": (st or {}).get("mode", "fast"), "busy": False}
     st["ts"] = now
+    st["cid"] = chat_id
     _chats[chat_id] = st
     while len(_chats) > MAX_CHATS:
         k, v = next(iter(_chats.items()))
@@ -492,7 +505,8 @@ def _welcome_text(name: str, info: Optional[dict]) -> str:
         f"{hello}\nMen <b>Slide Studio AI</b> botiman. 🎨\n\n"
         "Bir necha daqiqada professional taqdimot tayyorlab beraman: mavzuni yozing — "
         "AI slaydlarni yozadi va <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi.\n"
-        "Tayyor bo'lgach matn bilan tahrirlash ham mumkin: <i>«3-slaydni qisqartir»</i>."
+        "Tayyor bo'lgach matn bilan tahrirlash ham mumkin: <i>«3-slaydni qisqartir»</i>. "
+        "Tayyor <b>.pptx</b> faylingizni yuborsangiz ham tahrirlayman."
         f"{bal}\n\n👇 Pastdagi tugmalardan foydalaning yoki mavzuni yozing."
     )
 
@@ -540,6 +554,25 @@ def _now_iso() -> str:
 def _as_uuid(v: Any) -> Optional[str]:
     try:
         return str(uuid.UUID(str(v)))
+    except Exception:
+        return None
+
+
+def _sign(p: str) -> str:
+    return hmac.new(SECRET.encode(), p.encode(), hashlib.sha256).hexdigest()[:20]
+
+
+def _make_token(kind: str, a: int, b: int, ttl: int) -> str:
+    p = f"{kind}.{int(a)}.{int(b)}.{int(time.time()) + int(ttl)}"
+    return f"{p}.{_sign(p)}"
+
+
+def _check_token(kind: str, tok: str) -> Optional[Tuple[int, int]]:
+    try:
+        k, a, b, exp, sig = str(tok or "").split(".")
+        if k != kind or not hmac.compare_digest(sig, _sign(f"{k}.{a}.{b}.{exp}")) or int(exp) < time.time():
+            return None
+        return int(a), int(b)
     except Exception:
         return None
 
@@ -685,7 +718,14 @@ def _link_consume_sync(user: dict, code: str) -> dict:
     sb.table("tg_link_codes").delete().eq("code", code).execute()          # bir martalik
     if expired:
         return {"error": "bad_code"}
-    uid, email = str(row["user_id"]), str(row["email"])
+    return _link_apply_sync(tid, str(row["user_id"]), str(row["email"]))
+
+
+def _link_apply_sync(tid: int, uid: str, email: str) -> dict:
+    """Telegram ID ni sayt akkauntiga bog'laydi (kod orqali ham, havola orqali ham shu yerga keladi)."""
+    sb = _sb()
+    if not sb:
+        return {"error": "db"}
 
     # Oldin botda sotib olingan PULLIK varaqlar yo'qolmasin: tg<ID>@t.me akkauntidan sayt akkauntiga ko'chiriladi.
     # (Bepul kunlik varaqlar ko'chirilmaydi — ikki akkaunt orqali ko'paytirib bo'lmasin.)
@@ -1206,7 +1246,7 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
         if intent == "chat" or not has_change:
             await _charge(uid, email, 0, tokens, mode, {"src": "telegram", "kind": "chat"})
             reply = decks.clean(data.get("reply"), 800) or "Tushunmadim, iltimos aniqroq yozing — masalan: «3-slaydni qisqartir»."
-            await _edit(chat_id, msg_id, f"💬 {esc(reply)}", kb_done(st.get("topic", "")))
+            await _edit(chat_id, msg_id, f"💬 {esc(reply)}", kb_done(st))
             return
         new, changed = None, 0
         if isinstance(data.get("ops"), list):
@@ -1215,7 +1255,7 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
             new = decks.normalize_deck(data["deck"], len(deck["slides"]) + 8, deck.get("title", ""))
             changed = _changed_slides(deck, new) if new else 0
         if not new:
-            await _edit(chat_id, msg_id, "⚠️ O'zgartirishni qo'llab bo'lmadi. Hech narsa yechilmadi — boshqacha yozib ko'ring.", kb_done(st.get("topic", "")))
+            await _edit(chat_id, msg_id, "⚠️ O'zgartirishni qo'llab bo'lmadi. Hech narsa yechilmadi — boshqacha yozib ko'ring.", kb_done(st))
             return
         afford = int(_deps["total_credits"](usage) // _page_units(mode))
         if changed > afford:
@@ -1236,10 +1276,10 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
         )
         await _send_files(chat_id, "all")
     except asyncio.TimeoutError:
-        await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring.", kb_done(st.get("topic", "")))
+        await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring.", kb_done(st))
     except Exception as e:
         _warn("edit", f"tahrir xatosi: {type(e).__name__}: {str(e)[:160]}")
-        await _edit(chat_id, msg_id, "⚠️ Xatolik yuz berdi. Hech narsa yechilmadi.", kb_done(st.get("topic", "")))
+        await _edit(chat_id, msg_id, "⚠️ Xatolik yuz berdi. Hech narsa yechilmadi.", kb_done(st))
     finally:
         st["busy"] = False
 
@@ -1274,12 +1314,12 @@ async def _send_files(chat_id: int, fmt: str) -> bool:
             ok_all = (await tg_send_document(chat_id, name, data, mime, cap)) and ok_all
             first, data = False, None
         if ok_all:
-            await _send(chat_id, "✅ Tayyor! Yana format kerakmi yoki o'zgartirish qilamizmi?\n<i>Masalan: «3-slaydni qisqartir», «sarlavhasini o'zgartir».</i>", kb_done(st.get("topic", "")))
+            await _send(chat_id, "✅ Tayyor! Yana format kerakmi yoki o'zgartirish qilamizmi?\n<i>Masalan: «3-slaydni qisqartir», «sarlavhasini o'zgartir».</i>", kb_done(st))
         else:
-            await _send(chat_id, "⚠️ Faylni yuborib bo'lmadi. Qayta urinib ko'ring.", kb_done(st.get("topic", "")))
+            await _send(chat_id, "⚠️ Faylni yuborib bo'lmadi. Qayta urinib ko'ring.", kb_done(st))
     except Exception as e:
         _warn("files", f"fayl yig'ish xatosi: {type(e).__name__}: {str(e)[:160]}")
-        await _send(chat_id, "⚠️ Faylni tayyorlashda xatolik. Qayta urinib ko'ring.", kb_done(st.get("topic", "")))
+        await _send(chat_id, "⚠️ Faylni tayyorlashda xatolik. Qayta urinib ko'ring.", kb_done(st))
     finally:
         files = None
         st["imgs"] = {}                                                         # rasmlar ham RAM'dan tozalanadi
@@ -1310,6 +1350,113 @@ async def _ask_count(chat_id: int, user: dict, topic: str) -> None:
 # ----------------------------------------------------------------------------------------------
 # Update ishlovi
 # ----------------------------------------------------------------------------------------------
+PPTX_MAX = 12 * 1024 * 1024
+
+
+async def _download_tg_file(file_id: str) -> Optional[bytes]:
+    info = await tg("getFile", file_id=file_id)
+    path = (info or {}).get("file_path") if isinstance(info, dict) else None
+    if not path or int((info or {}).get("file_size") or 0) > PPTX_MAX:
+        return None
+    try:
+        r = await _http().get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}", timeout=httpx.Timeout(60.0, connect=8.0))
+        if r.status_code == 200 and len(r.content) <= PPTX_MAX:
+            return r.content
+    except Exception as e:
+        _warn("dl", f"fayl yuklab olinmadi: {type(e).__name__}")
+    return None
+
+
+def _pptx_to_deck(data: bytes, fname: str = "") -> Tuple[Optional[dict], int]:
+    """Yuborilgan PPTX dan matnni (sarlavha, punktlar, jadval) o'qib qisqa deck JSON yasaydi. Rasm/dizayn o'qilmaydi."""
+    from pptx import Presentation
+    prs = Presentation(io.BytesIO(data))
+    raw, skipped = [], 0
+    for sl in prs.slides:
+        title_shape = None
+        try:
+            title_shape = sl.shapes.title
+        except Exception:
+            pass
+        title = ""
+        if title_shape is not None and getattr(title_shape, "has_text_frame", False):
+            title = title_shape.text_frame.text.strip()
+        paras: List[str] = []
+        for sh in sl.shapes:
+            if title_shape is not None and sh.shape_id == title_shape.shape_id:
+                continue
+            if getattr(sh, "has_text_frame", False) and sh.has_text_frame:
+                for p in sh.text_frame.paragraphs:
+                    tx = (p.text or "").strip()
+                    if tx:
+                        paras.append(tx)
+            elif getattr(sh, "has_table", False) and sh.has_table:
+                for row in sh.table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        paras.append(" — ".join(cells))
+        if not title and paras:
+            title = paras.pop(0)
+        if not title and not paras:
+            skipped += 1
+            continue
+        raw.append((title, paras))
+    if not raw:
+        return None, skipped
+    if len(raw) > MAX_SLIDES:
+        skipped += len(raw) - MAX_SLIDES
+        raw = raw[:MAX_SLIDES]
+    slides = []
+    for i, (title, paras) in enumerate(raw):
+        if i == 0:
+            slides.append({"layout": "title", "title": title, "subtitle": paras[0] if paras else ""})
+        elif i == len(raw) - 1 and len(raw) >= 3 and len(paras) <= 1:
+            slides.append({"layout": "closing", "title": title, "subtitle": paras[0] if paras else ""})
+        elif paras:
+            slides.append({"layout": "bullets", "title": title, "bullets": paras[:6]})
+        else:
+            skipped += 1
+    base = os.path.splitext(fname or "")[0]
+    deck = decks.normalize_deck({"title": raw[0][0] or base, "subtitle": "", "theme": "ocean", "slides": slides}, MAX_SLIDES + 2, base)
+    return deck, skipped
+
+
+async def _run_import(chat_id: int, user: dict, file_id: str, fname: str) -> None:
+    st = _state(chat_id)
+    st["busy"] = True
+    msg_id: Optional[int] = None
+    try:
+        sent = await _send(chat_id, "📎 <b>PPTX o'qilmoqda…</b>")
+        msg_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
+        data = await _download_tg_file(file_id)
+        if not data:
+            await _edit(chat_id, msg_id, "⚠️ Faylni yuklab bo'lmadi. <b>.pptx</b> bo'lsin va 12 MB dan oshmasin.")
+            return
+        deck, skipped = await asyncio.to_thread(_pptx_to_deck, data, fname)
+        data = None
+        if not deck:
+            await _edit(chat_id, msg_id, "⚠️ PPTX ichida o'qiladigan matn topilmadi (faqat rasmli slaydlar bo'lishi mumkin).")
+            return
+        uid, email = await _ensure_uid(user)
+        lang = _guess_lang(json.dumps(deck, ensure_ascii=False)[:2000])
+        st.update(deck=deck, imgs={}, topic=deck["title"], awaiting=None, lang=lang, uid=uid, email=email)
+        st["deck_id"] = await asyncio.to_thread(_deck_insert_sync, chat_id, uid, deck, deck["title"], lang)
+        note = f"\n<i>{skipped} ta bo'sh/rasmli slayd o'tkazib yuborildi.</i>" if skipped else ""
+        await _edit(
+            chat_id, msg_id,
+            f"✅ <b>{esc(deck['title'])}</b> o'qildi (bepul)\n🎞 {len(deck['slides'])} ta slayd{note}\n\n{_summary(deck)}\n\n"
+            "ℹ️ Matn olindi; asl dizayn va rasmlar o'qilmaydi — yangi fayl bot dizaynida chiqadi.\n"
+            "✏️ <b>Endi yozing:</b> <i>«2-slaydni qisqartir»</i>, <i>«ruscha tarjima qil»</i>…",
+            kb_done(st),
+        )
+    except Exception as e:
+        _warn("import", f"PPTX import xatosi: {type(e).__name__}: {str(e)[:140]}")
+        await _edit(chat_id, msg_id, "⚠️ PPTX ni o'qib bo'lmadi. Boshqa fayl yuboring yoki mavzuni yozing.")
+    finally:
+        st["busy"] = False
+        gc.collect()
+
+
 async def _show_my(cid: int) -> None:
     rows = await asyncio.to_thread(_deck_list_sync, cid)
     if not rows:
@@ -1355,23 +1502,29 @@ async def _do_buy(cid: int, user: dict) -> None:
 
 
 async def _link_help(cid: int) -> None:
+    url = f"{SITE_URL}/?tglink={_make_token('L', cid, 0, 600)}"
     await _send(
         cid,
-        "🔗 <b>Sayt akkauntini ulash</b>\n\n1️⃣ Saytni oching va Google bilan kiring\n2️⃣ Balans panelidagi <b>«✈️ Telegram»</b> tugmasini bosing\n"
-        "3️⃣ Chiqqan kodni shu yerga yuboring: <code>/link KOD</code>\n\nUlangach botdagi va saytdagi balans <b>bir xil</b> bo'ladi.",
-        {"inline_keyboard": [[{"text": "🌐 Saytni ochish", "url": SITE_URL}]]},
+        "🔗 <b>Sayt akkauntini ulash</b> (Google)\n\n1️⃣ Pastdagi tugmani bosing — sayt ochiladi\n2️⃣ Google bilan kiring — ulash <b>o'zi</b> tugaydi ✅\n\n"
+        "<i>Telegram ichida Google kirishga ruxsat bermasa: havolani ⋮ → «Brauzerda ochish» orqali oching.</i>\n"
+        "Yoki saytda: ⚙️ Sozlamalar → <b>«Telegram botni ulash»</b> (bir bosish).",
+        {"inline_keyboard": [[{"text": "🌐 Saytda ulash", "url": url}]]},
     )
+
+
+def _linked_text(res: dict) -> str:
+    extra = f"\n💎 Botdagi {_fmt_pages(res['moved_pages'])} pullik varaq sayt akkauntingizga ko'chirildi." if res.get("moved_pages") else ""
+    return f"✅ <b>Ulandi!</b> Sayt akkauntingiz ({esc(_mask_email(res['email']))}) bilan balans endi <b>bir xil</b>.{extra}"
 
 
 async def _do_link(cid: int, user: dict, code: str) -> None:
     res = await asyncio.to_thread(_link_consume_sync, user, code)
     if res.get("ok"):
-        extra = f"\n💎 Botdagi {_fmt_pages(res['moved_pages'])} pullik varaq sayt akkauntingizga ko'chirildi." if res.get("moved_pages") else ""
-        await _send(cid, f"✅ <b>Ulandi!</b> Sayt akkauntingiz ({esc(_mask_email(res['email']))}) bilan balans endi <b>bir xil</b>.{extra}", kb_main())
+        await _send(cid, _linked_text(res), kb_main())
     elif res.get("error") == "db":
         await _send(cid, "⚙️ Ulashni hozir bajarib bo'lmadi (baza sozlanmagan). Keyinroq urinib ko'ring.")
     else:
-        await _send(cid, "❌ Kod noto'g'ri yoki eskirgan (10 daqiqa yashaydi). Saytda «✈️ Telegram» tugmasini bosib yangi kod oling.")
+        await _send(cid, "❌ Kod noto'g'ri yoki eskirgan (10 daqiqa yashaydi). Saytda «Telegram botni ulash» ni bosib yangi kod oling.")
 
 
 async def _menu_action(cid: int, user: dict, action: str) -> None:
@@ -1421,7 +1574,7 @@ async def _handle_callback(cb: dict) -> None:
             return
         if await _restore_deck(cid, did):
             d = st["deck"]
-            await _send(cid, f"📂 <b>{esc(d['title'])}</b> ochildi\n🎞 {len(d['slides'])} ta slayd · 🎨 {esc(_theme_label(d))}\n\n{_summary(d)}\n\n<b>Yuklab oling yoki matn bilan tahrirlang:</b>", kb_done(st.get("topic", "")))
+            await _send(cid, f"📂 <b>{esc(d['title'])}</b> ochildi\n🎞 {len(d['slides'])} ta slayd · 🎨 {esc(_theme_label(d))}\n\n{_summary(d)}\n\n<b>Yuklab oling yoki matn bilan tahrirlang:</b>", kb_done(st))
         else:
             await _send(cid, "Bu slayd topilmadi (o'chirilgan bo'lishi mumkin).")
     elif data.startswith("mode:"):
@@ -1458,15 +1611,15 @@ async def _handle_callback(cb: dict) -> None:
         if st.get("deck"):
             await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_themes())
     elif data == "back":
-        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_done(st.get("topic", "")))
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_done(st))
     elif data.startswith("th:"):
         name = data[3:]
         if st.get("deck") and decks and name in decks.THEMES:
             st["deck"]["theme"] = name
             if st.get("deck_id"):
                 await asyncio.to_thread(_deck_update_sync, st["deck_id"], cid, st["deck"])
-            await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_done(st.get("topic", "")))
-            await _send(cid, f"🎨 Rang: <b>{esc(decks.THEMES[name]['label'])}</b> (bepul). Endi yuklab oling 👇", kb_done(st.get("topic", "")))
+            await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup=kb_done(st))
+            await _send(cid, f"🎨 Rang: <b>{esc(decks.THEMES[name]['label'])}</b> (bepul). Endi yuklab oling 👇", kb_done(st))
     elif data == "new":
         await _menu_action(cid, user, "new")
 
@@ -1521,6 +1674,16 @@ async def handle_update(data: dict) -> None:
     if not isinstance(chat_id, int) or user.get("is_bot") or not isinstance(user.get("id"), int):
         return
     if _limited(chat_id):
+        return
+
+    doc = msg.get("document")
+    if isinstance(doc, dict):
+        if _state(chat_id).get("busy"):
+            await _send(chat_id, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
+        elif str(doc.get("file_name") or "").lower().endswith(".pptx"):
+            _spawn(_run_import(chat_id, user, str(doc.get("file_id")), str(doc.get("file_name"))))
+        else:
+            await _send(chat_id, "📎 Hozircha faqat <b>.pptx</b> fayl qabul qilaman — AI matnini tahrirlab beraman.", kb_reply())
         return
 
     text = (msg.get("text") or "").strip()
@@ -1720,6 +1883,61 @@ async def telegram_link_status(request: Request):
     except Exception:
         pass
     return JSONResponse({"linked": linked, "enabled": True}, headers={"Cache-Control": "no-store"})
+
+
+_used_links: "OrderedDict[str, float]" = OrderedDict()
+
+
+@router.post("/api/telegram/link-complete")
+async def telegram_link_complete(request: Request):
+    """Botdagi «Saytda ulash» havolasi (?tglink=TOKEN): sayt Google bilan kirgach shu yerga murojaat qiladi — ulash o'zi tugaydi."""
+    if not ENABLED:
+        return JSONResponse({"error": "telegram_disabled"}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    key = str((body or {}).get("link") or "")
+    ids = _check_token("L", key)
+    if not ids:
+        return JSONResponse({"error": "expired"}, status_code=410)
+    if key in _used_links:
+        return JSONResponse({"error": "used"}, status_code=409)
+    me = await _web_user(request)
+    if not me or not me[1]:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+    if me[1].endswith("@" + TG_EMAIL_DOMAIN):
+        return JSONResponse({"error": "already_telegram"}, status_code=400)
+    res = await asyncio.to_thread(_link_apply_sync, ids[0], me[0], me[1])
+    if not res.get("ok"):
+        return JSONResponse({"error": res.get("error") or "link_failed"}, status_code=503)
+    _used_links[key] = time.time()
+    while len(_used_links) > 500:
+        _used_links.popitem(last=False)
+    await _send(ids[0], _linked_text(res), kb_main())
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/telegram/deck-file")
+async def telegram_deck_file(t: str = ""):
+    """Botdagi «Muharrirda ochish»: slaydni bazadagi qisqa JSON'dan RAM'da PPTX qilib beradi (diskka yozilmaydi);
+    sayt uni editorga o'zi import qiladi."""
+    if not ENABLED or decks is None:
+        return JSONResponse({"error": "disabled"}, status_code=503)
+    ids = _check_token("D", t)
+    if not ids:
+        return JSONResponse({"error": "expired"}, status_code=410)
+    deck_id, tid = ids
+    row = await asyncio.to_thread(_deck_get_sync, tid, deck_id)
+    deck = decks.normalize_deck(row.get("deck"), MAX_SLIDES + 10, row.get("title") or "") if row else None
+    if not deck:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    async with _gen_sem:
+        imgs = await _fetch_images(deck, {}, True)
+        _name, data, mime = await asyncio.to_thread(decks.export, deck, _img_index(deck, imgs), "pptx", row.get("lang") or "uz")
+    imgs = None
+    return Response(content=data, media_type=mime.split(";")[0],
+                    headers={"Cache-Control": "no-store", "Content-Disposition": 'inline; filename="slayd.pptx"'})
 
 
 @router.post("/api/telegram/auth")
