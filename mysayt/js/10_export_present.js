@@ -636,52 +636,12 @@
           await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
           const dataUrl = c.toDataURL('image/jpeg', 0.92);
 
+          // v46.2: Matn ajratib olish (text extraction) UMUMAN o'chirildi.
+          // Sabab: PDF sahifasi allaqachon to'liq rasm sifatida chiziladi.
+          // Ustiga qo'shimcha matn qutichalari qo'shilsa — pozitsiya xato chiqadi,
+          // kichik qora yozuvlar pastki burchakka / chapga yig'ilib, dublikat hosil qiladi.
+          // Foydalanuvchi toza vizual slayd oladi (tahrirlash uchun asl loyiha JSON kerak).
           const objects = [];
-          // Faqat tashqi (oddiy) PDF'larda matn ajratib olamiz.
-          // Slide Studio PDF'larida matn qatlami opacity:0 va pozitsiya noto'g'ri chiqadi → o'tkazib yuboramiz.
-          if (!isSlideStudioPdf) {
-            try {
-              const textContent = await page.getTextContent();
-              const sx = 960 / viewport.width;
-              const sy = 540 / viewport.height;
-              const items = textContent.items || [];
-
-              const lines = [];
-              items.forEach((it) => {
-                const str = (it.str || '').trim();
-                if (!str) return;
-                const t = it.transform || [1, 0, 0, 1, 0, 0];
-                const x = t[4] * sx;
-                const y = (viewport.height - t[5]) * sy;
-                const fontSize = Math.max(10, Math.min(48, Math.abs(t[0] || t[3] || 12) * sy));
-                lines.push({ text: str, left: x, top: y - fontSize, fontSize });
-              });
-              lines.sort((a, b) => a.top - b.top || a.left - b.left);
-              const merged = [];
-              lines.forEach((ln) => {
-                const last = merged[merged.length - 1];
-                if (last && Math.abs(last.top - ln.top) < last.fontSize * 0.55 && ln.left - (last.left + last._w) < 40) {
-                  last.text += ' ' + ln.text;
-                  last._w = (ln.left - last.left) + ln.fontSize * ln.text.length * 0.5;
-                } else {
-                  merged.push({ ...ln, _w: ln.fontSize * ln.text.length * 0.5 });
-                }
-              });
-              merged.slice(0, 40).forEach((ln) => {
-                objects.push({
-                  type: 'textbox',
-                  text: ln.text,
-                  left: Math.max(20, Math.min(880, ln.left)),
-                  top: Math.max(20, Math.min(500, ln.top)),
-                  width: Math.min(900, Math.max(120, ln._w || 400)),
-                  fontSize: ln.fontSize,
-                  fill: '#111827',
-                  fontFamily: 'Arial',
-                  selectable: true, evented: true
-                });
-              });
-            } catch (e) {  }
-          }
 
           const slideJson = {
             objects,
