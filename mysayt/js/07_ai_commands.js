@@ -115,6 +115,29 @@
               showToast(count + ' ta yangi slayd yaratildi');
               break;
             }
+            case 'template_slide':
+            case 'fill_template': {
+              try {
+                if (typeof window.ssApplyTemplateSlide === 'function') {
+                  await window.ssApplyTemplateSlide(cmd);
+                } else {
+                  console.warn('ssApplyTemplateSlide yo\'q');
+                }
+              } catch (e) { console.warn('template_slide:', e); }
+              break;
+            }
+            case 'template_deck':
+            case 'create_templated_deck':
+            case 'create_deck_templates': {
+              try {
+                if (typeof window.ssApplyTemplateDeck === 'function') {
+                  await window.ssApplyTemplateDeck(cmd);
+                } else {
+                  console.warn('ssApplyTemplateDeck yo\'q');
+                }
+              } catch (e) { console.warn('template_deck:', e); }
+              break;
+            }
             case 'move_object': {
               const found = findObjectByGlobalId(cmd.id);
               if (!found) break;
@@ -1174,7 +1197,7 @@
 
       const _needsFullReload = (lastActionReport || []).slice(_batchReportStart).some((line) => {
         if (!line || line.startsWith('❌')) return false;
-        return /replace_slide|clear_slide|insert_slide|create_slides|reset_deck|delete_extra|delete_slide/i.test(line);
+        return /replace_slide|clear_slide|insert_slide|create_slides|reset_deck|delete_extra|delete_slide|template_slide|template_deck|fill_template|create_templated_deck/i.test(line);
       });
       const _incrementalOnly = (lastActionReport || []).slice(_batchReportStart).some((line) => {
         if (!line || line.startsWith('❌')) return false;
