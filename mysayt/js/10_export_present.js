@@ -658,13 +658,14 @@
         saveCurrentSlideState();
         slides = newSlides;
         activeIndex = 0;
-        bumpObjectIdCounterFromSlides();
+        try { bumpObjectIdCounterFromSlides(); } catch(e) {}
         renderSidebar();
         await loadSlideCanvasAsync(0);
         updateSlideCounterUI();
-        updateAllImageBadges();
+        try { updateAllImageBadges(); } catch(e) {}
         recordGlobalState();
-        Swal.fire({ icon: 'success', title: 'PDF ochildi', text: n + ' ta sahifa slaydga aylantirildi.', timer: 2200, showConfirmButton: false });
+        // v46.3 marker — agar bu xabar chiqsa, yangi kod ishlayapti
+        Swal.fire({ icon: 'success', title: 'PDF ochildi (v46.3)', text: n + ' ta sahifa (faqat rasm, matn quti yo\'q).', timer: 2800, showConfirmButton: false });
       } catch (e) {
         Swal.fire('PDF xato', e.message || String(e), 'error');
       }
