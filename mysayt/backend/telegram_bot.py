@@ -153,12 +153,13 @@ def esc(s: Any) -> str:
 # Matnlar
 # ----------------------------------------------------------------------------------------------
 BTN_NEW = "🎨 Yangi slayd yaratish"
+BTN_FILE = "📎 Fayl yuklash"
 BTN_MY = "📂 Slaydlarim / Tozalash"
 BTN_BAL = "💳 Balans / To'ldirish"
 BTN_SITE = "🌐 Saytga o'tish"
 BTN_SET = "⚙️ Sozlamalar"
 BTN_ABOUT = "ℹ️ Bot haqida"
-MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about"}
+MENU = {BTN_NEW: "new", BTN_FILE: "file", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about"}
 DEFAULT_SLIDES = 8
 
 HELP = (
@@ -195,7 +196,17 @@ ABOUT = (
     "Bazada faqat akkaunt, balans va qisqa slayd matni qoladi.\n\n"
     "Savol bo'lsa /help ni bosing."
 )
-GREETING_RE = re.compile(r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalay|nima gap|start|boshla)[\s!.,?]*$", re.I)
+GREETING_RE = re.compile(
+    r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalaysan|qalay|nima gap|start|boshla|yahshimisiz|yaxshimisiz)[\s!.,?😊👋]*$",
+    re.I,
+)
+
+def _is_greeting(text: str) -> bool:
+    """Faqat salomlashuv — slayd mavzusi emas."""
+    t = (text or "").strip()
+    if not t or len(t) > 40:
+        return False
+    return bool(GREETING_RE.match(t))
 COUNT_RE = re.compile(r"(\d{1,2})\s*(?:ta|tadan|ta\.)?\s*[-–]?\s*(?:slayd\w*|slaid\w*|slide\w*|слайд\w*|varaq\w*|sahifa\w*|page\w*)", re.I)
 MIN_SLIDES, MAX_SLIDES = 3, 20
 
@@ -213,7 +224,12 @@ def _btn(text: str, data: str) -> dict:
 def kb_reply() -> dict:
     """Doimiy pastki menyu (foydalanuvchi har doim ko'radi)."""
     return {
-        "keyboard": [[{"text": BTN_NEW}], [{"text": BTN_MY}, {"text": BTN_BAL}], [{"text": BTN_SET}, {"text": BTN_ABOUT}], [{"text": BTN_SITE}]],
+        "keyboard": [
+            [{"text": BTN_NEW}],
+            [{"text": BTN_FILE}, {"text": BTN_MY}],
+            [{"text": BTN_BAL}, {"text": BTN_SET}],
+            [{"text": BTN_ABOUT}, {"text": BTN_SITE}],
+        ],
         "resize_keyboard": True, "is_persistent": True, "input_field_placeholder": "Slayd mavzusini yozing…",
     }
 
@@ -1665,6 +1681,13 @@ async def _menu_action(cid: int, user: dict, action: str) -> None:
         await _send(cid, "🎨 <b>Slayd mavzusini yozing</b>, masalan:\n<i>«Sun'iy intellekt va uning kelajagi»</i>\n\n"
                          "Xohlasangiz batafsil yozing: <i>«10 ta slayd, tibbiyotda SI, yashil rang, rasmsiz»</i>.\n"
                          f"Yozishingiz bilan AI tayyorlab, <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi. (Odatda {DEFAULT_SLIDES} ta slayd)")
+    elif action == "file":
+        st["awaiting"] = None
+        await _send(cid, "📎 <b>Faylni shu yerga yuboring</b>\n\n"
+                         "Qo'llanadi: <b>PPTX, PDF, HTML, rasm, GIF, video</b> (15 MB gacha).\n\n"
+                         "• PPTX — matn o'qiladi, AI bilan tahrirlash mumkin\n"
+                         "• PDF / rasm / video — muharrirda ochish tugmasi chiqadi\n\n"
+                         "<i>Faylni oddiy xabar qilib yuboring (📎 qog'oz ignasi orqali).</i>")
     elif action == "my":
         await _show_my(cid)
     elif action == "bal":
@@ -1795,7 +1818,10 @@ async def _handle_text(chat_id: int, user: dict, text: str) -> None:
     if st.get("busy"):
         await _send(chat_id, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
         return
-    if GREETING_RE.match(text):
+    # Salom / greeting — HECH QACHON slayd yasamaydi (hatto «Yangi slayd» kutayotganda ham)
+    if _is_greeting(text):
+        if st.get("awaiting") == "topic":
+            st["awaiting"] = None
         await _send_welcome(chat_id, user)
         return
     if st.get("awaiting") == "topic":                      # «🎨 Yangi slayd» bosilgan — bu xabar mavzu
