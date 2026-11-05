@@ -636,20 +636,82 @@
           await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
           const dataUrl = c.toDataURL('image/jpeg', 0.92);
 
-          // v46.2: Matn ajratib olish (text extraction) UMUMAN o'chirildi.
-          // Sabab: PDF sahifasi allaqachon to'liq rasm sifatida chiziladi.
-          // Ustiga qo'shimcha matn qutichalari qo'shilsa — pozitsiya xato chiqadi,
-          // kichik qora yozuvlar pastki burchakka / chapga yig'ilib, dublikat hosil qiladi.
-          // Foydalanuvchi toza vizual slayd oladi (tahrirlash uchun asl loyiha JSON kerak).
+          // v46.5: Yaxshilangan matn ajratish — pozitsiya to'g'ri, elementlar tahrirlanadi.
+          // Sahifa rasmi orqa fon, matnlar ustida to'g'ri joyda (dublikat ko'rinmasligi uchun).
           const objects = [];
+          try {
+            const textContent = await page.getTextContent();
+            const items = textContent.items || [];
+            const sx = 960 / viewport.width;
+            const sy = 540 / viewport.height;
+
+            // Bir xil qatordagi matnlarni birlashtirish
+            const raw = [];
+            items.forEach((it) => {
+              const str = (it.str || '').replace(/\s+/g, ' ').trim();
+              if (!str) return;
+              const t = it.transform || [1, 0, 0, 1, 0, 0];
+              // PDF koordinatasi: transform[4]=x, transform[5]=y (pastki chap)
+              // Canvas: yuqoridan pastga
+              const fontH = Math.abs(t[3] || t[0] || 12);
+              const x = t[4] * sx;
+              const y = (viewport.height - t[5] - fontH * 0.15) * sy;
+              const fontSize = Math.max(8, Math.min(72, fontH * sy * 0.95));
+              raw.push({ text: str, left: x, top: y, fontSize: fontSize, w: (it.width || str.length * fontH * 0.5) * sx });
+            });
+
+            // Qator bo'yicha guruhlash
+            raw.sort((a, b) => a.top - b.top || a.left - b.left);
+            const lines = [];
+            raw.forEach((it) => {
+              const last = lines[lines.length - 1];
+              if (last && Math.abs(last.top - it.top) < last.fontSize * 0.45 &&
+                  it.left - (last.left + last.w) < last.fontSize * 1.8) {
+                last.text += (last.text.endsWith(' ') || it.text.startsWith(' ') ? '' : ' ') + it.text;
+                last.w = (it.left + it.w) - last.left;
+                last.fontSize = Math.max(last.fontSize, it.fontSize);
+              } else {
+                lines.push({ text: it.text, left: it.left, top: it.top, fontSize: it.fontSize, w: it.w });
+              }
+            });
+
+            lines.forEach((ln) => {
+              if (!ln.text.trim()) return;
+              const fs = Math.round(ln.fontSize * 10) / 10;
+              const left = Math.max(0, Math.min(920, ln.left));
+              const top = Math.max(0, Math.min(520, ln.top));
+              const width = Math.max(40, Math.min(940 - left, ln.w + fs * 0.5));
+              objects.push({
+                type: 'textbox',
+                text: ln.text,
+                left: left,
+                top: top,
+                width: width,
+                fontSize: fs,
+                fill: '#111827',
+                fontFamily: 'Arial',
+                originX: 'left',
+                originY: 'top',
+                selectable: true,
+                evented: true,
+                // Rasm ustida aniq o'tirmasin deb biroz shaffof (ixtiyoriy)
+                opacity: 0.92
+              });
+            });
+          } catch (e) { console.warn('PDF text extract:', e); }
 
           const slideJson = {
-            objects,
+            objects: objects,
             background: '#ffffff',
             backgroundImage: {
-              type: 'image', src: dataUrl, left: 0, top: 0,
-              scaleX: 960 / (c.width || 960), scaleY: 540 / (c.height || 540),
-              originX: 'left', originY: 'top'
+              type: 'image',
+              src: dataUrl,
+              left: 0,
+              top: 0,
+              scaleX: 960 / (c.width || 960),
+              scaleY: 540 / (c.height || 540),
+              originX: 'left',
+              originY: 'top'
             }
           };
           newSlides.push({ json: JSON.stringify(slideJson), thumb: dataUrl, imageNumbers: [] });
@@ -664,8 +726,7 @@
         updateSlideCounterUI();
         try { updateAllImageBadges(); } catch(e) {}
         recordGlobalState();
-        // v46.3 marker — agar bu xabar chiqsa, yangi kod ishlayapti
-        Swal.fire({ icon: 'success', title: 'PDF ochildi (v46.3)', text: n + ' ta sahifa (faqat rasm, matn quti yo\'q).', timer: 2800, showConfirmButton: false });
+        Swal.fire({ icon: 'success', title: 'PDF ochildi (v46.5)', text: n + ' ta sahifa + tahrirlanadigan matnlar.', timer: 2600, showConfirmButton: false });
       } catch (e) {
         Swal.fire('PDF xato', e.message || String(e), 'error');
       }
