@@ -57,3 +57,6 @@ PPTX galereya videosi (haqiqiy MP4), Namoyish tugmalari olib tashlandi, tezkor j
 
 ## v44
 Mobil siljish tuzatildi, balans bloki sig'adi, Telegram bot to'liq qayta yozildi (AI slayd + PPTX/PDF/HTML). Batafsil: `docs/CHANGES_v44.md`.
+
+## v46
+Avto-saqlash o'chirildi (sahifa doim toza), Ctrl+Z tuzatildi, «Rasmni tozalash» va «Bot haqida», botda fayl → «Redaktorda ochish», «Sozlamalar». Batafsil: `docs/CHANGES_v46.md`.

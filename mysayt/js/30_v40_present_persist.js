@@ -224,6 +224,7 @@
   setTimeout(function () { window.__ssRestoreChecked = true; }, 12000);
   var armedAt = Date.now() + 8000;   // ishga tushgandan keyin 8 soniya saqlanmaydi (tiklash tugashi uchun)
   async function persistNow(force) {
+    return;   // v46: avto-saqlash O'CHIRILGAN — sahifa ochilsa/yangilansa har doim toza, yangi slayd (IndexedDB'ga yozilmaydi)
     if (saving || typeof indexedDB === 'undefined') return;
     if (!window.__ssRestoreChecked || Date.now() < armedAt) return;
     if (!slides || !slides.length) return;
@@ -252,11 +253,9 @@
 
   /** 03_auth_project.js: initProjectFromUrl() ishga tushishida chaqiriladi */
   window.ssLoadSavedProject = async function () {
-    try {
-      var d = await pTimeoutP(idbGet(), 4000);
-      if (d && Array.isArray(d.slides) && d.slides.length) return d;
-    } catch (e) {  }
-    finally { window.__ssRestoreChecked = true; }
+    // v46: eski versiyalar IndexedDB'da qoldirgan loyiha ham o'chiriladi va HECH QACHON tiklanmaydi
+    window.__ssRestoreChecked = true;
+    try { if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(DB_NAME); } catch (e) {}
     return null;
   };
   function pTimeoutP(p, ms) { return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(null); }, ms); })]); }

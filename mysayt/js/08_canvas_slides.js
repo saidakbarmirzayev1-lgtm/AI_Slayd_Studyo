@@ -274,6 +274,17 @@
       addBtn.onclick = (e) => { e.stopPropagation(); addSlide('title_body'); };
       addBtn.innerHTML = `<span class="material-symbols-outlined">add</span> Slayd Qo'shish`;
       scrollArea.appendChild(addBtn);
+      // v46: «Rasmni tozalash» (hammasini birinchi holatga qaytaradi) va «Bot haqida»
+      const resetBtn = document.createElement('div');
+      resetBtn.className = 'btn-reset-canvas';
+      resetBtn.onclick = (e) => { e.stopPropagation(); if (window.ssResetCanvas) window.ssResetCanvas(); };
+      resetBtn.innerHTML = `<span class="material-symbols-outlined">restart_alt</span> Rasmni tozalash`;
+      scrollArea.appendChild(resetBtn);
+      const aboutBtn = document.createElement('div');
+      aboutBtn.className = 'btn-about-bot';
+      aboutBtn.onclick = (e) => { e.stopPropagation(); if (window.ssShowAbout) window.ssShowAbout(); };
+      aboutBtn.innerHTML = `<span class="material-symbols-outlined">info</span> Bot haqida`;
+      scrollArea.appendChild(aboutBtn);
       sidebar.appendChild(scrollArea);
 
       renderSidebarUserProfile(sidebar);

@@ -107,6 +107,8 @@
     } finally { if (sk) sk.remove(); }
   }
 
+  window.ssPlaceFile = placeFile;   // v46: botdan kelgan rasm/video shu orqali slaydga qo'yiladi
+
   async function placeUrl(url, pos) {
     url = url.trim();
     if (typeof VideoKit !== 'undefined' && VideoKit.isVideoUrl(url) && !/\.gif(\?|#|$)/i.test(url)) {

@@ -1234,3 +1234,11 @@ button, .tb-btn, .modal-btn { -webkit-tap-highlight-color: transparent; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* v46: sidebar — «Rasmni tozalash» va «Bot haqida» */
+.btn-reset-canvas, .btn-about-bot { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .2s ease; flex-shrink: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+.btn-reset-canvas { background: #fff; border: 1px dashed #d93025; color: #d93025; margin-bottom: 2px; }
+.btn-reset-canvas:hover { background: #fce8e6; border-style: solid; }
+.btn-about-bot { background: #f1f3f4; border: 1px solid transparent; color: #3c4043; margin-bottom: 8px; }
+.btn-about-bot:hover { background: #e8eaed; }
+.btn-reset-canvas .material-symbols-outlined, .btn-about-bot .material-symbols-outlined { font-size: 18px; }

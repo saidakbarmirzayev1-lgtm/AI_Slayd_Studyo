@@ -156,7 +156,9 @@ BTN_NEW = "🎨 Yangi slayd yaratish"
 BTN_MY = "📂 Slaydlarim / Tozalash"
 BTN_BAL = "💳 Balans / To'ldirish"
 BTN_SITE = "🌐 Saytga o'tish"
-MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site"}
+BTN_SET = "⚙️ Sozlamalar"
+BTN_ABOUT = "ℹ️ Bot haqida"
+MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about"}
 DEFAULT_SLIDES = 8
 
 HELP = (
@@ -168,12 +170,30 @@ HELP = (
     "/credits — balans (varaqlar)\n"
     "/mode — Tez ⚡ / Chuqur 🧠 AI rejimi\n"
     "/link KOD — sayt akkauntini ulash · /unlink — uzish\n"
+    "/settings — sozlamalar (Google ulash / uzish)\n"
+    "/about — bot haqida\n"
     "/site — saytga havola\n\n"
     "Mavzuni oddiy xabar qilib yozing — AI darhol <b>PPTX + PDF + HTML</b> tayyorlab yuboradi. "
     "Slayd soni, rang, rasm haqida ham yozishingiz mumkin: <i>«10 ta slayd, tibbiyotda SI, yashil rang»</i>.\n"
     "Tayyor slaydni matn bilan tahrirlang: <i>«3-slaydni qisqartir»</i>, <i>«sarlavhasini o'zgartir»</i>.\n"
-    "📎 Tayyor <b>.pptx</b> faylingizni yuboring — AI matnini tahrirlab beradi.\n"
+    "📎 Istalgan rasm/faylni yuboring — «✏️ Redaktorda ochish» tugmasi chiqadi. <b>.pptx</b> bo'lsa AI matnini ham tahrirlab beradi.\n"
     "Narx: <b>1 slayd = 1 varaq</b> (Chuqur AI — 3 baravar). Kuniga bepul varaqlar beriladi."
+)
+ABOUT = (
+    "ℹ️ <b>Slide Studio AI — bot haqida</b>\n\n"
+    "<b>Nima bu?</b> AI yordamida professional slayd / taqdimot yaratadigan xizmat. Bitta loyiha — ikki joyda: "
+    "<b>sayt</b> (to'liq muharrir) va shu <b>bot</b>. Ikkalasi BITTA akkaunt va BITTA balansdan foydalanadi.\n\n"
+    "<b>Botda nima qilish mumkin?</b>\n"
+    "• Mavzuni yozing — AI slaydlarni yozib, <b>PPTX · PDF · HTML</b> yuboradi.\n"
+    "• Matn bilan tahrirlash: <i>«3-slaydni qisqartir»</i>, <i>«ruscha tarjima qil»</i>.\n"
+    "• Istalgan <b>rasm yoki fayl</b> yuboring — pastida «✏️ Redaktorda ochish» chiqadi; bosilsa fayl Mini App muharririda ochiladi.\n"
+    "• To'liq muharrir (barcha imkoniyatlar, sayt bilan bir xil): pastki chapdagi <b>🚀 Muharrir</b> tugmasi.\n\n"
+    "<b>Akkaunt va balans.</b> 1 Telegram = 1 Google akkaunt. «⚙️ Sozlamalar» orqali Google'ni ulaysiz yoki uzasiz. "
+    "Ulangach botda ham, saytda ham to'lov qilsangiz — varaqlar ikkala joyda ko'payadi, sarflasangiz ikkalasida kamayadi.\n\n"
+    "<b>Narx.</b> 1 slayd = 1 varaq (Chuqur AI — 3 baravar). Har kuni bepul varaqlar beriladi; ko'proq kerak bo'lsa «💳 Balans / To'ldirish».\n\n"
+    "<b>Maxfiylik.</b> Fayllar serverda saqlanmaydi: faqat vaqtincha xotirada turadi va tez o'chiriladi. "
+    "Bazada faqat akkaunt, balans va qisqa slayd matni qoladi.\n\n"
+    "Savol bo'lsa /help ni bosing."
 )
 GREETING_RE = re.compile(r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalay|nima gap|start|boshla)[\s!.,?]*$", re.I)
 COUNT_RE = re.compile(r"(\d{1,2})\s*(?:ta|tadan|ta\.)?\s*[-–]?\s*(?:slayd\w*|slaid\w*|slide\w*|слайд\w*|varaq\w*|sahifa\w*|page\w*)", re.I)
@@ -193,7 +213,7 @@ def _btn(text: str, data: str) -> dict:
 def kb_reply() -> dict:
     """Doimiy pastki menyu (foydalanuvchi har doim ko'radi)."""
     return {
-        "keyboard": [[{"text": BTN_NEW}], [{"text": BTN_MY}, {"text": BTN_BAL}], [{"text": BTN_SITE}]],
+        "keyboard": [[{"text": BTN_NEW}], [{"text": BTN_MY}, {"text": BTN_BAL}], [{"text": BTN_SET}, {"text": BTN_ABOUT}], [{"text": BTN_SITE}]],
         "resize_keyboard": True, "is_persistent": True, "input_field_placeholder": "Slayd mavzusini yozing…",
     }
 
@@ -1353,14 +1373,14 @@ async def _ask_count(chat_id: int, user: dict, topic: str) -> None:
 PPTX_MAX = 12 * 1024 * 1024
 
 
-async def _download_tg_file(file_id: str) -> Optional[bytes]:
+async def _download_tg_file(file_id: str, limit: int = PPTX_MAX) -> Optional[bytes]:
     info = await tg("getFile", file_id=file_id)
     path = (info or {}).get("file_path") if isinstance(info, dict) else None
-    if not path or int((info or {}).get("file_size") or 0) > PPTX_MAX:
+    if not path or int((info or {}).get("file_size") or 0) > limit:
         return None
     try:
         r = await _http().get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}", timeout=httpx.Timeout(60.0, connect=8.0))
-        if r.status_code == 200 and len(r.content) <= PPTX_MAX:
+        if r.status_code == 200 and len(r.content) <= limit:
             return r.content
     except Exception as e:
         _warn("dl", f"fayl yuklab olinmadi: {type(e).__name__}")
@@ -1421,14 +1441,98 @@ def _pptx_to_deck(data: bytes, fname: str = "") -> Tuple[Optional[dict], int]:
     return deck, skipped
 
 
-async def _run_import(chat_id: int, user: dict, file_id: str, fname: str) -> None:
+# ----------------------------------------------------------------------------------------------
+# «✏️ Redaktorda ochish»: botga yuborilgan fayl VAQTINCHA (15 daqiqa) faqat RAM'da turadi, Mini App/brauzer uni
+# imzolangan havola bilan oladi. Diskka yozilmaydi, bazaga tushmaydi.
+# ----------------------------------------------------------------------------------------------
+FILE_MAX = 15 * 1024 * 1024
+FILE_TTL = 900
+FILES_KEEP, FILES_BYTES = 40, 160 * 1024 * 1024
+EDITABLE_RE = re.compile(r"\.(png|jpe?g|webp|gif|bmp|avif|mp4|webm|mov|m4v|ogv|ogg|pptx|pdf|html?)$", re.I)
+_files: "OrderedDict[int, dict]" = OrderedDict()
+
+
+def _files_sweep() -> None:
+    now = time.time()
+    for k in [k for k, v in _files.items() if v["exp"] < now]:
+        _files.pop(k, None)
+    while _files and (len(_files) > FILES_KEEP or sum(len(v["data"]) for v in _files.values()) > FILES_BYTES):
+        _files.popitem(last=False)
+
+
+def _file_put(cid: int, name: str, data: bytes) -> int:
+    _files_sweep()
+    key = secrets.randbelow(2 ** 31 - 1) + 1
+    _files[key] = {"cid": int(cid), "name": name[:120], "data": data, "exp": time.time() + FILE_TTL}
+    return key
+
+
+def _file_url(cid: int, key: int) -> str:
+    return f"{SITE_URL}/?src=tg&tgfile={_make_token('F', cid, key, FILE_TTL)}"
+
+
+def _incoming_file(msg: dict) -> Optional[Tuple[str, str, int]]:
+    """Xabardagi rasm/hujjat/video/GIF -> (file_id, fayl_nomi, hajmi) yoki None."""
+    doc = msg.get("document")
+    if isinstance(doc, dict) and doc.get("file_id"):
+        return str(doc["file_id"]), str(doc.get("file_name") or "fayl"), int(doc.get("file_size") or 0)
+    ph = msg.get("photo")
+    if isinstance(ph, list) and ph and isinstance(ph[-1], dict):
+        best = max((p for p in ph if isinstance(p, dict) and p.get("file_id")), key=lambda p: int(p.get("file_size") or 0), default=None)
+        if best:
+            return str(best["file_id"]), "foto.jpg", int(best.get("file_size") or 0)
+    for key, nm in (("animation", "animatsiya.mp4"), ("video", "video.mp4")):
+        v = msg.get(key)
+        if isinstance(v, dict) and v.get("file_id"):
+            return str(v["file_id"]), str(v.get("file_name") or nm), int(v.get("file_size") or 0)
+    return None
+
+
+async def _run_file(chat_id: int, user: dict, file_id: str, fname: str, size: int) -> None:
+    st = _state(chat_id)
+    st["busy"] = True
+    try:
+        if not EDITABLE_RE.search(fname):
+            await _send(chat_id, "📎 Bu turdagi fayl muharrirda ochilmaydi.\nQo'llanadi: <b>rasm, GIF, video, PPTX, PDF, HTML</b>.", kb_reply())
+            return
+        if size and size > FILE_MAX:
+            await _send(chat_id, "⚠️ Fayl katta — 15 MB gacha yuboring.", kb_reply())
+            return
+        sent = await _send(chat_id, "📎 <b>Fayl qabul qilinmoqda…</b>")
+        mid = (sent or {}).get("message_id") if isinstance(sent, dict) else None
+        data = await _download_tg_file(file_id, FILE_MAX)
+        if not data:
+            await _edit(chat_id, mid, "⚠️ Faylni yuklab bo'lmadi (15 MB dan oshmasin). Qayta yuboring.")
+            return
+        key = _file_put(chat_id, fname, data)
+        n = len(data)
+        data = None
+        url = _file_url(chat_id, key)
+        rows = [[{"text": "✏️ Redaktorda ochish", "web_app": {"url": url}}]]
+        if fname.lower().endswith(".pptx"):
+            rows.append([_btn("🤖 AI bilan matnini tahrirlash", f"pptxai:{key}")])
+        rows.append([{"text": "🌐 Brauzerda ochish", "url": url}])
+        size_txt = f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{max(1, n // 1024)} KB"
+        await _edit(chat_id, mid, f"✅ <b>{esc(fname)}</b> ({size_txt}) qabul qilindi.\n"
+                                  f"Muharrirda ochish uchun tugmani bosing. <i>Fayl {FILE_TTL // 60} daqiqa saqlanadi, so'ng o'chadi.</i>",
+                    {"inline_keyboard": rows})
+    except Exception as e:
+        _warn("file", f"fayl qabuli xatosi: {type(e).__name__}: {str(e)[:140]}")
+        await _send(chat_id, "⚠️ Faylni qabul qilib bo'lmadi. Keyinroq qayta urinib ko'ring.")
+    finally:
+        st["busy"] = False
+        gc.collect()
+
+
+async def _run_import(chat_id: int, user: dict, file_id: str, fname: str, pre: Optional[bytes] = None) -> None:
     st = _state(chat_id)
     st["busy"] = True
     msg_id: Optional[int] = None
     try:
         sent = await _send(chat_id, "📎 <b>PPTX o'qilmoqda…</b>")
         msg_id = (sent or {}).get("message_id") if isinstance(sent, dict) else None
-        data = await _download_tg_file(file_id)
+        data = pre or await _download_tg_file(file_id)
+        pre = None
         if not data:
             await _edit(chat_id, msg_id, "⚠️ Faylni yuklab bo'lmadi. <b>.pptx</b> bo'lsin va 12 MB dan oshmasin.")
             return
@@ -1527,6 +1631,33 @@ async def _do_link(cid: int, user: dict, code: str) -> None:
         await _send(cid, "❌ Kod noto'g'ri yoki eskirgan (10 daqiqa yashaydi). Saytda «Telegram botni ulash» ni bosib yangi kod oling.")
 
 
+async def _show_settings(cid: int, user: dict, mid: Optional[int] = None) -> None:
+    st = _state(cid)
+    try:
+        info = await asyncio.wait_for(_balance_info(user), timeout=6)
+    except Exception:
+        info = None
+    deep = st.get("mode") == "deep"
+    if info and info.get("linked"):
+        acc = f"🔗 Google akkaunt: <b>ulangan</b> — {esc(_mask_email(info['email']))}\nBalans sayt bilan <b>bir xil</b>."
+        first = [_btn("🔓 Google'ni uzish", "unl")]
+    elif info:
+        acc = "🔗 Google akkaunt: <b>ulanmagan</b>\nUlasangiz sayt va bot balansi birlashadi."
+        first = [_btn("🔗 Google akkauntni ulash", "linkinfo")]
+    else:
+        acc = "🔗 Google akkaunt: holatni hozir o'qib bo'lmadi."
+        first = [_btn("🔗 Google akkauntni ulash", "linkinfo")]
+    text = (f"⚙️ <b>Sozlamalar</b>\n\n{acc}\n\n🤖 AI rejimi: <b>{'🧠 Chuqur' if deep else '⚡ Tez'}</b>\n"
+            "<i>1 Telegram = 1 Google akkaunt. Uzsangiz bot o'zining Telegram akkauntiga qaytadi, sayt akkaunti balansi o'zgarmaydi.</i>")
+    kb = {"inline_keyboard": [
+        first,
+        [_btn(("✅ " if not deep else "") + "⚡ Tez AI", "smode:fast"), _btn(("✅ " if deep else "") + "🧠 Chuqur AI", "smode:deep")],
+        [_btn("💳 Balans", "bal"), _btn("ℹ️ Bot haqida", "about")],
+        [{"text": "🌐 Saytda ochish", "web_app": {"url": _app_url()}}],
+    ]}
+    await _edit(cid, mid, text, kb)
+
+
 async def _menu_action(cid: int, user: dict, action: str) -> None:
     st = _state(cid)
     if action == "new":
@@ -1540,6 +1671,10 @@ async def _menu_action(cid: int, user: dict, action: str) -> None:
         await _show_balance(cid, user)
     elif action == "site":
         await _send(cid, f"🌐 <b>Slide Studio</b> — to'liq muharrir (Mini App)\n{esc(SITE_URL)}", kb_main())
+    elif action == "set":
+        await _show_settings(cid, user)
+    elif action == "about":
+        await _send(cid, ABOUT, kb_main())
 
 
 async def _handle_callback(cb: dict) -> None:
@@ -1557,6 +1692,33 @@ async def _handle_callback(cb: dict) -> None:
         await _do_buy(cid, user)
     elif data == "linkinfo":
         await _link_help(cid)
+    elif data == "dismiss":
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+    elif data == "about":
+        await _send(cid, ABOUT, kb_main())
+    elif data.startswith("smode:"):
+        st["mode"] = "deep" if data.endswith("deep") else "fast"
+        await _show_settings(cid, user, mid)
+    elif data == "unl":
+        await _send(cid, "🔓 <b>Google akkaunt uzilsinmi?</b>\nBot o'zining Telegram akkauntiga qaytadi. Sayt akkauntingiz va uning balansi o'zgarmaydi.",
+                    {"inline_keyboard": [[_btn("✅ Ha, uzish", "unl_yes"), _btn("↩️ Yo'q", "unl_no")]]})
+    elif data == "unl_yes":
+        ok = await asyncio.to_thread(_unlink_sync, user["id"])
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+        await _send(cid, "🔓 Google akkaunt uzildi. Qayta ulash: «⚙️ Sozlamalar» → «Google akkauntni ulash»." if ok else "⚙️ Hozir bajarib bo'lmadi. Keyinroq urinib ko'ring.")
+    elif data == "unl_no":
+        await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+    elif data.startswith("pptxai:"):
+        try:
+            f = _files.get(int(data.split(":", 1)[1]))
+        except Exception:
+            f = None
+        if not f or f["cid"] != cid or f["exp"] < time.time():
+            await _send(cid, "⌛ Fayl muddati tugagan — qayta yuboring.")
+        elif st.get("busy"):
+            await _send(cid, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
+        else:
+            _spawn(_run_import(cid, user, "", f["name"], f["data"]))
     elif data == "my":
         await _show_my(cid)
     elif data == "clr":
@@ -1655,6 +1817,10 @@ async def _send_welcome(chat_id: int, user: dict) -> None:
     except Exception:
         info = None
     await _send(chat_id, _welcome_text(user.get("first_name") or "", info), kb_reply())
+    if info and not info.get("linked"):
+        await _send(chat_id, "🔗 <b>Google akkauntingizni ulang</b>\nShunda sayt va bot BITTA balansdan foydalanadi: botda to'lasangiz saytda ham, saytda to'lasangiz botda ham ko'payadi.\n"
+                             "<i>1 Telegram = 1 Google akkaunt. Keyin «⚙️ Sozlamalar» orqali uzish ham mumkin.</i>",
+                    {"inline_keyboard": [[_btn("🔗 Google akkauntni ulash", "linkinfo")], [_btn("Keyinroq", "dismiss")]]})
 
 
 async def handle_update(data: dict) -> None:
@@ -1676,19 +1842,17 @@ async def handle_update(data: dict) -> None:
     if _limited(chat_id):
         return
 
-    doc = msg.get("document")
-    if isinstance(doc, dict):
+    incoming = _incoming_file(msg)
+    if incoming:
         if _state(chat_id).get("busy"):
             await _send(chat_id, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
-        elif str(doc.get("file_name") or "").lower().endswith(".pptx"):
-            _spawn(_run_import(chat_id, user, str(doc.get("file_id")), str(doc.get("file_name"))))
         else:
-            await _send(chat_id, "📎 Hozircha faqat <b>.pptx</b> fayl qabul qilaman — AI matnini tahrirlab beraman.", kb_reply())
+            _spawn(_run_file(chat_id, user, *incoming))
         return
 
     text = (msg.get("text") or "").strip()
     if not text:
-        await _send(chat_id, "Mavzuni <b>matn</b> ko'rinishida yozib yuboring, masalan: <i>«Sun'iy intellekt kelajagi»</i>.", kb_reply())
+        await _send(chat_id, "Mavzuni <b>matn</b> ko'rinishida yozib yuboring, masalan: <i>«Sun'iy intellekt kelajagi»</i>.\nRasm yoki fayl yuborsangiz — muharrirda ochib beraman.", kb_reply())
         return
 
     if text.startswith("/"):
@@ -1726,6 +1890,10 @@ async def handle_update(data: dict) -> None:
             await _send(chat_id, "🔓 Sayt akkaunti uzildi. Bot endi o'zining Telegram akkauntidan foydalanadi." if ok else "⚙️ Hozir bajarib bo'lmadi.")
         elif cmd == "/site":
             await _menu_action(chat_id, user, "site")
+        elif cmd in ("/settings", "/sozlamalar"):
+            await _menu_action(chat_id, user, "set")
+        elif cmd in ("/about", "/bot"):
+            await _menu_action(chat_id, user, "about")
         else:
             await _send(chat_id, HELP, kb_reply())
         return
@@ -1918,6 +2086,19 @@ async def telegram_link_complete(request: Request):
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/api/telegram/file")
+async def telegram_file(t: str = ""):
+    """Botga yuborilgan faylni (RAM'da, 15 daqiqa) muharrirga beradi. Havola imzolangan va faqat shu chatga tegishli."""
+    if not ENABLED:
+        return JSONResponse({"error": "disabled"}, status_code=503)
+    ids = _check_token("F", t)
+    f = _files.get(ids[1]) if ids else None
+    if not ids or not f or f["cid"] != ids[0] or f["exp"] < time.time():
+        return JSONResponse({"error": "expired"}, status_code=410)
+    return Response(content=f["data"], media_type="application/octet-stream",
+                    headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-File-Name": quote(f["name"])})
+
+
 @router.get("/api/telegram/deck-file")
 async def telegram_deck_file(t: str = ""):
     """Botdagi «Muharrirda ochish»: slaydni bazadagi qisqa JSON'dan RAM'da PPTX qilib beradi (diskka yozilmaydi);
@@ -1976,6 +2157,8 @@ async def _set_commands() -> None:
         {"command": "clear", "description": "Slaydlarimni tozalash"},
         {"command": "credits", "description": "Balans / to'ldirish"},
         {"command": "link", "description": "Sayt akkauntini ulash"},
+        {"command": "settings", "description": "Sozlamalar (Google ulash / uzish)"},
+        {"command": "about", "description": "Bot haqida"},
         {"command": "mode", "description": "Tez ⚡ / Chuqur 🧠 AI"},
         {"command": "help", "description": "Yordam"},
     ])
