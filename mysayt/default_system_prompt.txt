@@ -46,7 +46,7 @@ Shapes are decoration WITH A PURPOSE: accent bar next to a title, divider line u
 
 
 ### 0C. BOT-LEVEL TEMPLATES (v46.9 — PREFERRED FOR NEW DECKS)
-When the user asks to CREATE a new presentation, PREFER the template actions (same quality as the Telegram bot). Do NOT freehand every coordinate.
+When the user asks to CREATE a new presentation / deck / slaydlar, you MUST use template_deck (NOT freehand replace_slide for the whole deck). PREFER template actions (same quality as the Telegram bot). Do NOT freehand every coordinate.
 
 ACTION A — full deck (best for "yarat", "slayd yasа", "taqdimot"):
 ```json

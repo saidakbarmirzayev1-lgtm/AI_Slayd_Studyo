@@ -69,25 +69,31 @@
 
   function buildTitle(data, t, meta) {
     var objects = [];
-    // To'liq qorong'i fon
-    objects.push(rect({ left: 0, top: 0, width: 960, height: 540, fill: t.dark, rx: 0, ry: 0 }));
-    objects.push(rect({ left: 0, top: 0, width: 12, height: 540, fill: t.accent, rx: 0, ry: 0 }));
-    var title = clean(data.title || 'Sarlavha', 70);
-    var sub = clean(data.subtitle || '', 120);
+    var hasImg = !!(data.imageUrl && /^https?:\/\//i.test(data.imageUrl));
+    // Left dark panel (bot style)
+    objects.push(rect({ left: 0, top: 0, width: hasImg ? 520 : 960, height: 540, fill: t.dark, rx: 0, ry: 0 }));
+    if (hasImg) {
+      objects.push({
+        type: 'image', src: data.imageUrl,
+        left: 520, top: 0, width: 440, height: 540,
+        originX: 'left', originY: 'top', selectable: true, evented: true
+      });
+    }
     objects.push(txt({
-      text: title, left: 64, top: 180, width: 700, height: 140,
-      fontSize: title.length > 40 ? 36 : 48, fontWeight: 'bold', fill: '#FFFFFF'
+      text: 'SLIDE STUDIO AI', left: 56, top: 120, width: 400, height: 24,
+      fontSize: 12, fill: t.accent, fontFamily: 'Inter', fontWeight: 'bold'
     }));
+    objects.push(rect({ left: 56, top: 152, width: 48, height: 5, fill: t.accent, rx: 3, ry: 3 }));
+    var title = clean(data.title || 'Sarlavha', 70);
+    objects.push(txt({
+      text: title, left: 56, top: 180, width: hasImg ? 430 : 840, height: 140,
+      fontSize: title.length > 35 ? 34 : 44, fontWeight: 'bold', fill: '#FFFFFF'
+    }));
+    var sub = clean(data.subtitle || '', 120);
     if (sub) {
       objects.push(txt({
-        text: sub, left: 64, top: 340, width: 680, height: 80,
-        fontSize: 20, fill: 'rgba(255,255,255,0.78)', fontFamily: 'Inter'
-      }));
-    }
-    if (meta && meta.deckTitle) {
-      objects.push(txt({
-        text: clean(meta.deckTitle, 50), left: 64, top: 500, width: 600, height: 24,
-        fontSize: 12, fill: 'rgba(255,255,255,0.45)', fontFamily: 'Inter'
+        text: sub, left: 56, top: 340, width: hasImg ? 420 : 800, height: 80,
+        fontSize: 18, fill: 'rgba(255,255,255,0.78)', fontFamily: 'Inter'
       }));
     }
     return { objects: objects, background: t.dark };
@@ -116,29 +122,38 @@
     var objects = [topbar(t)];
     var title = clean(data.title || '', 70);
     objects.push(txt({
-      text: title, left: 48, top: 36, width: 860, height: 56,
-      fontSize: 30, fontWeight: 'bold', fill: t.primary
+      text: title, left: 48, top: 28, width: 860, height: 48,
+      fontSize: 28, fontWeight: 'bold', fill: t.primary
     }));
-    objects.push(rect({ left: 48, top: 100, width: 80, height: 5, fill: t.accent, rx: 3, ry: 3 }));
+    objects.push(rect({ left: 48, top: 82, width: 56, height: 5, fill: t.accent, rx: 3, ry: 3 }));
 
     var bullets = Array.isArray(data.bullets) ? data.bullets : [];
-    bullets = bullets.slice(0, 6).map(function (b) { return clean(b, 110); }).filter(Boolean);
-    var y = 130;
-    bullets.forEach(function (b, i) {
-      // Raqam doira
+    bullets = bullets.slice(0, 6).map(function (b) { return clean(b, 120); }).filter(Boolean);
+    var hasImg = !!(data.imageUrl && /^https?:\/\//i.test(data.imageUrl));
+    var textW = hasImg ? 520 : 860;
+    var y = 110;
+    bullets.forEach(function (b) {
       objects.push(rect({
-        left: 52, top: y + 4, width: 32, height: 32, fill: t.tint, rx: 16, ry: 16
+        left: 52, top: y + 8, width: 10, height: 10, fill: t.primary, rx: 5, ry: 5
       }));
       objects.push(txt({
-        text: String(i + 1), left: 52, top: y + 6, width: 32, height: 28,
-        fontSize: 14, fontWeight: 'bold', fill: t.primary, textAlign: 'center'
-      }));
-      objects.push(txt({
-        text: b, left: 100, top: y, width: 800, height: 48,
-        fontSize: 18, fill: t.text, fontFamily: 'Inter'
+        text: b, left: 78, top: y, width: textW - 30, height: 52,
+        fontSize: 16, fill: t.text, fontFamily: 'Inter'
       }));
       y += 56;
     });
+    if (hasImg) {
+      objects.push({
+        type: 'image', src: data.imageUrl,
+        left: 600, top: 120, width: 310, height: 310,
+        originX: 'left', originY: 'top', selectable: true, evented: true
+      });
+      // soft frame
+      objects.push(rect({
+        left: 600, top: 120, width: 310, height: 310, fill: 'transparent',
+        stroke: t.tint, strokeWidth: 0, rx: 18, ry: 18, selectable: false, evented: false
+      }));
+    }
     objects = objects.concat(footer(t, meta && meta.deckTitle, meta && meta.idx, meta && meta.total));
     return { objects: objects, background: t.bg };
   }
@@ -147,45 +162,54 @@
     var objects = [topbar(t)];
     var title = clean(data.title || '', 70);
     objects.push(txt({
-      text: title, left: 48, top: 32, width: 860, height: 52,
+      text: title, left: 48, top: 28, width: 860, height: 48,
       fontSize: 28, fontWeight: 'bold', fill: t.primary
     }));
+    objects.push(rect({ left: 48, top: 82, width: 56, height: 5, fill: t.accent, rx: 3, ry: 3 }));
+
     var cards = Array.isArray(data.cards) ? data.cards : [];
     cards = cards.slice(0, 4).map(function (c) {
       if (typeof c === 'string') return { heading: '', text: clean(c, 120) };
-      return { heading: clean(c.heading || c.title, 36), text: clean(c.text || c.body, 120) };
+      return { heading: clean(c.heading || c.title, 36), text: clean(c.text || c.body, 130) };
     }).filter(function (c) { return c.heading || c.text; });
-    if (cards.length < 2) {
-      while (cards.length < 2) cards.push({ heading: '…', text: '' });
-    }
+    while (cards.length < 2) cards.push({ heading: '…', text: '' });
+
     var n = cards.length;
-    var gap = 20;
-    var cw = (864 - gap * (n - 1)) / n;
-    var ch = 320;
-    var topY = 110;
+    var gap = 18;
+    var isGrid = n === 4;
+    var cols = isGrid ? 2 : n;
+    var rows = isGrid ? 2 : 1;
+    var cw = (864 - gap * (cols - 1)) / cols;
+    var ch = isGrid ? 170 : 300;
+    var top0 = 105;
+
     cards.forEach(function (c, k) {
-      var x = 48 + k * (cw + gap);
-      objects.push(rect({ left: x, top: topY, width: cw, height: ch, fill: t.card, shadow: true }));
-      // Accent strip
-      objects.push(rect({ left: x, top: topY, width: cw, height: 6, fill: t.accent, rx: 0, ry: 0 }));
-      // Number badge
+      var col = isGrid ? (k % 2) : k;
+      var row = isGrid ? Math.floor(k / 2) : 0;
+      var x = 48 + col * (cw + gap);
+      var y = top0 + row * (ch + gap);
+      // Card body
+      objects.push(rect({ left: x, top: y, width: cw, height: ch, fill: t.card }));
+      // Left accent bar (bot style)
+      objects.push(rect({ left: x, top: y, width: 6, height: ch, fill: t.accent, rx: 0, ry: 0 }));
+      // Number circle
       objects.push(rect({
-        left: x + 18, top: topY + 24, width: 36, height: 36, fill: t.tint, rx: 18, ry: 18
+        left: x + 22, top: y + 20, width: 34, height: 34, fill: t.primary, rx: 17, ry: 17
       }));
       objects.push(txt({
-        text: String(k + 1), left: x + 18, top: topY + 28, width: 36, height: 28,
-        fontSize: 15, fontWeight: 'bold', fill: t.primary, textAlign: 'center'
+        text: String(k + 1), left: x + 22, top: y + 24, width: 34, height: 28,
+        fontSize: 14, fontWeight: 'bold', fill: '#FFFFFF', textAlign: 'center'
       }));
       if (c.heading) {
         objects.push(txt({
-          text: c.heading, left: x + 18, top: topY + 78, width: cw - 36, height: 60,
-          fontSize: n <= 2 ? 22 : 18, fontWeight: 'bold', fill: t.primary
+          text: c.heading, left: x + 66, top: y + 22, width: cw - 88, height: 36,
+          fontSize: 18, fontWeight: 'bold', fill: t.primary
         }));
       }
       if (c.text) {
         objects.push(txt({
-          text: c.text, left: x + 18, top: topY + 150, width: cw - 36, height: 150,
-          fontSize: n <= 2 ? 16 : 14, fill: t.text, fontFamily: 'Inter'
+          text: c.text, left: x + 22, top: y + 70, width: cw - 44, height: ch - 90,
+          fontSize: 14, fill: t.text, fontFamily: 'Inter'
         }));
       }
     });
