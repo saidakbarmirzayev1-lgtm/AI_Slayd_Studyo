@@ -346,11 +346,29 @@
       return out;
     }
     function ssAppendMetaTrailer(pdfBytes, metaStr) {
+      // %%EOF dan KEYIN yozish ba'zi PDF o'quvchilarda (Adobe, mobil) "fayl buzilgan" xatosini beradi.
+      // Meta ni oxirgi %%EOF DAN OLDIN PDF comment sifatida qo'yamiz — struktura to'g'ri qoladi.
       const b64 = ssBytesToB64(new TextEncoder().encode(metaStr));
-      const tail = new TextEncoder().encode('\n' + SS_META_BEGIN + b64 + SS_META_END + '\n');
-      const out = new Uint8Array(pdfBytes.length + tail.length);
-      out.set(pdfBytes, 0);
-      out.set(tail, pdfBytes.length);
+      const comment = new TextEncoder().encode('\n% ' + SS_META_BEGIN + b64 + SS_META_END + '\n');
+      const eofMark = new TextEncoder().encode('%%EOF');
+      let pos = -1;
+      for (let i = pdfBytes.length - eofMark.length; i >= 0; i--) {
+        let ok = true;
+        for (let j = 0; j < eofMark.length; j++) {
+          if (pdfBytes[i + j] !== eofMark[j]) { ok = false; break; }
+        }
+        if (ok) { pos = i; break; }
+      }
+      if (pos < 0) {
+        const out = new Uint8Array(pdfBytes.length + comment.length);
+        out.set(pdfBytes, 0);
+        out.set(comment, pdfBytes.length);
+        return out;
+      }
+      const out = new Uint8Array(pdfBytes.length + comment.length);
+      out.set(pdfBytes.subarray(0, pos), 0);
+      out.set(comment, pos);
+      out.set(pdfBytes.subarray(pos), pos + comment.length);
       return out;
     }
     async function ssExtractMeta(pdfDoc, buf) {
@@ -963,7 +981,7 @@
             console.warn('PDF attach metadata:', e);
           }
 
-          let pdfBytes = await pdfDoc.save();
+          let pdfBytes = await pdfDoc.save({ useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false });
           try { pdfBytes = ssAppendMetaTrailer(pdfBytes, metaStr); } catch (e) { console.warn('PDF trailer:', e); }
           const blob = new Blob([pdfBytes], { type: 'application/pdf' });
           downloadBlob(blob, makeSafeFileName(projectTitle || 'presentation', 'pdf'));

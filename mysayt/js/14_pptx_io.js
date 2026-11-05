@@ -238,7 +238,7 @@
   }
 
   function addTextEl(slide, el) {
-    var text = String(el.text == null ? '' : el.text).replace(/\r\n?/g, '\n');
+    var text = String(el.text == null ? '' : el.text).replace(/\r\n?/g, '\n').replace(/[\u200B-\u200D\uFEFF\u00AD]/g, '');
     var bg = parseColor(el.backgroundColor);
     if (!text.trim() && !bg) return true;
     var sx = num(el.scaleX, 1) || 1, sy = num(el.scaleY, 1) || 1;
