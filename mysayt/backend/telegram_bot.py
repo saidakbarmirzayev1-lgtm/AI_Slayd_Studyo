@@ -160,6 +160,13 @@ BTN_SITE = "🌐 Saytga o'tish"
 BTN_SET = "⚙️ Sozlamalar"
 BTN_ABOUT = "ℹ️ Bot haqida"
 MENU = {BTN_NEW: "new", BTN_FILE: "file", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about"}
+
+try:
+    from backend import admin_panel as _admin
+except Exception as _ae:
+    _admin = None
+    print(f"[TG] admin_panel yuklanmadi: {_ae}")
+
 DEFAULT_SLIDES = 8
 
 HELP = (
@@ -1337,6 +1344,14 @@ async def _send_files(chat_id: int, fmt: str) -> bool:
         imgs_q = await _fetch_images(deck, st.get("imgs") or {}, True)          # faqat yetishmayotgan rasmlar
         st["imgs"], st["img_ts"] = imgs_q, time.time()
         lang = st.get("lang", "uz")
+        # Reklama varog'i (PRO / admin bo'lmasa)
+        try:
+            from backend.admin_panel import should_show_ads
+            _u = await asyncio.to_thread(_usage_now_sync, st.get("uid") or f"tg:{chat_id}", st.get("email") or "")
+            if should_show_ads(_u, chat_id, st.get("email") or ""):
+                deck = decks.append_ad_slide(deck, True)
+        except Exception as _ad_e:
+            _warn("ad", str(_ad_e)[:80])
         if fmt == "all":
             files = await asyncio.to_thread(decks.export_all, deck, _img_index(deck, imgs_q), lang)
         else:
@@ -1717,6 +1732,22 @@ async def _handle_callback(cb: dict) -> None:
         await _link_help(cid)
     elif data == "dismiss":
         await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
+    elif data.startswith("adm:"):
+        if not await _admin_guard(user):
+            await _send(cid, "⛔ Faqat admin.")
+        elif data == "adm:broadcast":
+            await _admin_broadcast(cid, user, "")
+        elif data == "adm:stats":
+            await _admin_stats(cid, user)
+        elif data == "adm:pro":
+            await _send(cid, "⭐ PRO berish: <code>/admin pro TELEGRAM_ID</code>")
+        elif data == "adm:unlimited":
+            await _send(cid, "♾️ Cheksiz: <code>/admin unlimited TELEGRAM_ID</code>")
+        elif data == "adm:refill":
+            await _send(cid, "🔋 Limit: <code>/admin refill TELEGRAM_ID</code>")
+        elif data == "adm:adinfo":
+            cfg = _admin.ad_config() if _admin else {}
+            await _send(cid, f"ℹ️ Reklama (.env)\nenabled={cfg.get('enabled')}\ntitle={esc(cfg.get('title') or '')}\nurl={esc(cfg.get('url') or '')}")
     elif data == "about":
         await _send(cid, ABOUT, kb_main())
     elif data.startswith("smode:"):
@@ -1824,6 +1855,10 @@ async def _handle_text(chat_id: int, user: dict, text: str) -> None:
             st["awaiting"] = None
         await _send_welcome(chat_id, user)
         return
+    if st.get("awaiting") == "admin_broadcast":
+        st["awaiting"] = None
+        await _admin_broadcast(chat_id, user, text)
+        return
     if st.get("awaiting") == "topic":                      # «🎨 Yangi slayd» bosilgan — bu xabar mavzu
         topic = " ".join(text.split())[:1500]
         st.update(awaiting=None, topic=topic)
@@ -1847,6 +1882,186 @@ async def _send_welcome(chat_id: int, user: dict) -> None:
         await _send(chat_id, "🔗 <b>Google akkauntingizni ulang</b>\nShunda sayt va bot BITTA balansdan foydalanadi: botda to'lasangiz saytda ham, saytda to'lasangiz botda ham ko'payadi.\n"
                              "<i>1 Telegram = 1 Google akkaunt. Keyin «⚙️ Sozlamalar» orqali uzish ham mumkin.</i>",
                     {"inline_keyboard": [[_btn("🔗 Google akkauntni ulash", "linkinfo")], [_btn("Keyinroq", "dismiss")]]})
+
+
+
+async def _admin_guard(user: dict) -> bool:
+    if not _admin:
+        return False
+    return _admin.is_admin_tg(user.get("id"))
+
+
+async def _admin_panel_kb() -> dict:
+    return {"inline_keyboard": [
+        [_btn("📣 Reklama yuborish", "adm:broadcast"), _btn("📊 Statistika", "adm:stats")],
+        [_btn("⭐ PRO berish", "adm:pro"), _btn("♾️ Cheksiz balans", "adm:unlimited")],
+        [_btn("🔋 Bugungi limit to'ldirish", "adm:refill"), _btn("ℹ️ Reklama sozlamasi", "adm:adinfo")],
+        [_btn("⬅️ Yopish", "dismiss")],
+    ]}
+
+
+async def _admin_show(chat_id: int, user: dict) -> None:
+    if not await _admin_guard(user):
+        await _send(chat_id, "⛔ Bu buyruq faqat admin uchun.")
+        return
+    cfg = _admin.ad_config() if _admin else {}
+    ad_state = "yoqilgan" if cfg.get("enabled") else "ochirilgan"
+    text = (
+        "🛡 <b>Admin panel</b>\n\n"
+        f"Reklama: <b>{ad_state}</b>\n"
+        f"Sarlavha: {esc(cfg.get('title') or '-')}\n"
+        f"URL: {esc(cfg.get('url') or '-')}\n\n"
+        "Buyruqlar:\n"
+        "• <code>/admin pro TG_ID</code> — PRO + katta balans\n"
+        "• <code>/admin unlimited TG_ID</code> — cheksiz\n"
+        "• <code>/admin refill TG_ID</code> — bugungi bepul limitni toldirish\n"
+        "• <code>/admin broadcast Matn...</code> — barcha bot foydalanuvchilariga xabar\n"
+        "• Reklama matni/URL .env dagi AD_* orqali\n"
+    )
+    await _send(chat_id, text, await _admin_panel_kb())
+
+
+async def _admin_broadcast(chat_id: int, user: dict, text: str) -> None:
+    if not await _admin_guard(user):
+        await _send(chat_id, "⛔ Faqat admin.")
+        return
+    msg = (text or "").strip()
+    if not msg:
+        st = _state(chat_id)
+        st["awaiting"] = "admin_broadcast"
+        await _send(chat_id, "📣 Reklama matnini yuboring (HTML mumkin). Bekor: /admin")
+        return
+    # tg_id lar: RAM + supabase tg_links
+    targets = set()
+    try:
+        for cid in list(_chats.keys()):
+            targets.add(int(cid))
+    except Exception:
+        pass
+    try:
+        sb = _sb()
+        if sb:
+            rows = sb.table("tg_links").select("tg_id").limit(5000).execute().data or []
+            for r in rows:
+                try:
+                    targets.add(int(r["tg_id"]))
+                except Exception:
+                    pass
+    except Exception as e:
+        _warn("admin", f"tg_links: {e}")
+    targets.discard(int(chat_id))
+    ok = fail = 0
+    status = await _send(chat_id, f"📣 Yuborilmoqda… {len(targets)} ta foydalanuvchi")
+    mid = (status or {}).get("message_id") if isinstance(status, dict) else None
+    for tid in list(targets):
+        try:
+            r = await tg("sendMessage", chat_id=tid, text=msg[:4000], parse_mode="HTML", disable_web_page_preview=True)
+            if r:
+                ok += 1
+            else:
+                fail += 1
+        except Exception:
+            fail += 1
+        await asyncio.sleep(0.05)
+    await _edit(chat_id, mid, f"✅ Reklama yuborildi.\nMuvaffaqiyat: <b>{ok}</b>\nXato: <b>{fail}</b>")
+
+
+async def _admin_set_pro(chat_id: int, user: dict, target_tg: str, unlimited: bool = False) -> None:
+    if not await _admin_guard(user):
+        await _send(chat_id, "⛔ Faqat admin.")
+        return
+    try:
+        tid = int(str(target_tg).strip())
+    except Exception:
+        await _send(chat_id, "Telegram ID noto'g'ri. Masalan: <code>/admin pro 123456789</code>")
+        return
+    # Find linked user_id/email
+    uid = email = None
+    try:
+        sb = _sb()
+        if sb:
+            rows = sb.table("tg_links").select("user_id,email").eq("tg_id", tid).limit(1).execute().data or []
+            if rows:
+                uid, email = rows[0].get("user_id"), rows[0].get("email")
+    except Exception as e:
+        _warn("admin", f"link: {e}")
+    if not uid:
+        # synthetic telegram account
+        uid = f"tg:{tid}"
+        email = f"tg_{tid}@telegram.local"
+    try:
+        usage = await asyncio.to_thread(_usage_now_sync, uid, email or "")
+        pages = _admin.PRO_PAGES if _admin else 999999
+        usage = _deps["add_paid_credits"](usage, pages)
+        usage["is_pro"] = True
+        if unlimited:
+            usage["unlimited"] = True
+        await asyncio.to_thread(_deps["save_usage"], uid, usage, 0)
+        # try persist is_pro column
+        try:
+            sb = _sb()
+            if sb:
+                sb.table("user_usage").update({"is_pro": True, "paid_credits": int(usage.get("paid_credits") or 0)}).eq("user_id", uid).execute()
+        except Exception:
+            pass
+        kind = "♾️ Cheksiz PRO" if unlimited else "⭐ PRO"
+        await _send(chat_id, f"✅ {kind} berildi.\nTG: <code>{tid}</code>\nUID: <code>{esc(str(uid))}</code>")
+        try:
+            await _send(tid, f"🎉 Sizga <b>{kind}</b> berildi! Reklama ko'rsatilmaydi, balans yangilandi.")
+        except Exception:
+            pass
+    except Exception as e:
+        await _send(chat_id, f"⚠️ Xato: {esc(str(e)[:120])}")
+
+
+async def _admin_refill(chat_id: int, user: dict, target_tg: str) -> None:
+    if not await _admin_guard(user):
+        await _send(chat_id, "⛔ Faqat admin.")
+        return
+    try:
+        tid = int(str(target_tg).strip())
+    except Exception:
+        await _send(chat_id, "Telegram ID noto'g'ri.")
+        return
+    uid = email = None
+    try:
+        sb = _sb()
+        if sb:
+            rows = sb.table("tg_links").select("user_id,email").eq("tg_id", tid).limit(1).execute().data or []
+            if rows:
+                uid, email = rows[0].get("user_id"), rows[0].get("email")
+    except Exception:
+        pass
+    if not uid:
+        uid = f"tg:{tid}"
+        email = f"tg_{tid}@telegram.local"
+    try:
+        usage = await asyncio.to_thread(_usage_now_sync, uid, email or "")
+        # free daily reset
+        from backend.monitoring import FREE_DAILY_UNITS
+        usage["free_credits"] = FREE_DAILY_UNITS
+        usage["last_reset_time"] = __import__("datetime").datetime.utcnow().isoformat()
+        await asyncio.to_thread(_deps["save_usage"], uid, usage, 0)
+        await _send(chat_id, f"✅ Bugungi bepul limit to'ldirildi.\nTG: <code>{tid}</code>")
+    except Exception as e:
+        await _send(chat_id, f"⚠️ {esc(str(e)[:120])}")
+
+
+async def _admin_stats(chat_id: int, user: dict) -> None:
+    if not await _admin_guard(user):
+        await _send(chat_id, "⛔ Faqat admin.")
+        return
+    n_ram = len(_chats)
+    n_links = 0
+    try:
+        sb = _sb()
+        if sb:
+            r = sb.table("tg_links").select("tg_id", count="exact").execute()
+            n_links = getattr(r, "count", None) or len(r.data or [])
+    except Exception:
+        pass
+    await _send(chat_id, f"📊 <b>Statistika</b>\n\nBot sessiyalari (RAM): <b>{n_ram}</b>\nUlangan akkauntlar (tg_links): <b>{n_links}</b>")
+
 
 
 async def handle_update(data: dict) -> None:
@@ -1920,6 +2135,24 @@ async def handle_update(data: dict) -> None:
             await _menu_action(chat_id, user, "set")
         elif cmd in ("/about", "/bot"):
             await _menu_action(chat_id, user, "about")
+        elif cmd == "/admin":
+            parts2 = arg.split(maxsplit=1) if arg else []
+            sub = (parts2[0].lower() if parts2 else "")
+            rest = parts2[1] if len(parts2) > 1 else ""
+            if not sub:
+                await _admin_show(chat_id, user)
+            elif sub == "broadcast":
+                await _admin_broadcast(chat_id, user, rest)
+            elif sub == "pro":
+                await _admin_set_pro(chat_id, user, rest, unlimited=False)
+            elif sub in ("unlimited", "inf", "cheksiz"):
+                await _admin_set_pro(chat_id, user, rest, unlimited=True)
+            elif sub == "refill":
+                await _admin_refill(chat_id, user, rest)
+            elif sub == "stats":
+                await _admin_stats(chat_id, user)
+            else:
+                await _admin_show(chat_id, user)
         else:
             await _send(chat_id, HELP, kb_reply())
         return
@@ -2187,6 +2420,7 @@ async def _set_commands() -> None:
         {"command": "about", "description": "Bot haqida"},
         {"command": "mode", "description": "Tez ⚡ / Chuqur 🧠 AI"},
         {"command": "help", "description": "Yordam"},
+        {"command": "admin", "description": "Admin panel (faqat admin)"},
     ])
     await tg("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 Muharrir", "web_app": {"url": _app_url()}})
 

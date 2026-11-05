@@ -398,6 +398,13 @@ def window_started(user: dict, free_daily: int = None) -> bool:
     u = normalize_user_row(user, free_daily)
     return int(u.get("free_credits") or 0) < int(free_daily)
 
+
+try:
+    from backend.admin_panel import user_is_pro as _user_is_pro
+except Exception:
+    def _user_is_pro(user):
+        return bool(user and (user.get("is_pro") or user.get("unlimited")))
+
 def seconds_until_reset(user: dict) -> int:
     user = normalize_user_row(user)
     if not window_started(user):
@@ -437,9 +444,15 @@ def charge_for_ai_turn(user: dict, pages_from_actions: int, searches: int = 0, m
       aks holda (faqat chat)  -> chat
       searches * search
     Balansdan oshmaydi. Returns: (user, charged_units, reason)
+    PRO / unlimited — bepul (0).
     """
     c = MODES.get(mode if mode in MODES else "fast")
     user = apply_24h_reset(user)
+    try:
+        if _user_is_pro(user):
+            return user, 0, "pro_free"
+    except Exception:
+        pass
     if not window_started(user):
         user["last_reset_time"] = _now().isoformat()
     pages_from_actions = max(0, int(pages_from_actions or 0))
@@ -491,7 +504,7 @@ def usage_payload(user: dict) -> dict:
         "spent_24h": spent,                   # BIRLIK (yoki None)
         "next_reset_in_seconds": seconds_until_reset(user),
         "window_started": window_started(user),
-        "is_pro": paid > 0,
+        "is_pro": bool(user.get("is_pro") or user.get("unlimited") or paid > 0),
         "free_daily": FREE_DAILY_PAGES,
         "pack_pages": PAGES_PER_PACK,
         "pack_price_usd": CHECKOUT_PRICE_USD,
