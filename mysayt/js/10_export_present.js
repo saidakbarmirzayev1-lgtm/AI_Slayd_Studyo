@@ -628,7 +628,8 @@
         for (let i = 1; i <= n; i++) {
           const page = await pdf.getPage(i);
           const base = page.getViewport({ scale: 1 });
-          const scale = Math.min(2.5, Math.max(1.5, 1600 / base.width));
+          // Yuqori sifatli render (ekran uchun)
+          const scale = Math.min(2.5, Math.max(1.8, 1600 / base.width));
           const viewport = page.getViewport({ scale });
           const c = document.createElement('canvas');
           c.width = viewport.width;
@@ -636,11 +637,90 @@
           await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
           const dataUrl = c.toDataURL('image/jpeg', 0.92);
 
-          // v46.6: Metadata yo'q PDF (bot, tashqi, eski) — FAQAT toza rasm.
-          // Matn ajratish o'chirilgan: pozitsiya xato + dublikat + "hammasi bitta rasm" chalkashligini oldini oladi.
-          // To'liq tahrirlash faqat muharrirdan eksport qilingan (metadata bor) PDF da ishlaydi.
+          // v46.7: Hybrid — fon = to'liq sahifa rasmi (dizayn saqlanadi).
+          // Ustiga pdf.js matnlari to'g'ri koordinata bilan Textbox qilib qo'yiladi.
+          // Shunda Chrome/Adobe kabi ko'rinadi + matnni tahrirlash mumkin.
+          const objects = [];
+          try {
+            const textContent = await page.getTextContent({ includeMarkedContent: true });
+            const items = textContent.items || [];
+            const sx = 960 / viewport.width;
+            const sy = 540 / viewport.height;
+
+            // 1) Har bir matn fragmentini o'qiymiz (PDF transform matritsasi)
+            const frags = [];
+            items.forEach((it) => {
+              if (!it || typeof it.str !== 'string') return;
+              const str = it.str.replace(/\s+/g, ' ');
+              if (!str.trim()) return;
+              const t = it.transform || [1, 0, 0, 1, 0, 0];
+              // t = [scaleX, skewY, skewX, scaleY, translateX, translateY]
+              // PDF: y pastki chapdan; bizning canvas: yuqori chapdan
+              const fontH = Math.sqrt(t[2] * t[2] + t[3] * t[3]) || Math.abs(t[3]) || Math.abs(t[0]) || 12;
+              const pdfX = t[4];
+              const pdfY = t[5];
+              // viewport masshtabida
+              const vx = pdfX * scale;
+              const vy = viewport.height - (pdfY * scale) - (fontH * scale * 0.05);
+              const left = vx * sx;
+              const top = vy * sy;
+              const fontSize = Math.max(7, Math.min(80, fontH * scale * sy * 0.98));
+              const w = (it.width != null ? it.width * scale : str.length * fontH * scale * 0.5) * sx;
+              frags.push({ text: str, left, top, fontSize, w, end: left + w });
+            });
+
+            // 2) Bir qatordagi yaqin fragmentlarni birlashtiramiz
+            frags.sort((a, b) => a.top - b.top || a.left - b.left);
+            const lines = [];
+            frags.forEach((f) => {
+              const last = lines[lines.length - 1];
+              const sameRow = last && Math.abs(last.top - f.top) < Math.max(last.fontSize, f.fontSize) * 0.55;
+              const close = last && (f.left - last.end) < Math.max(last.fontSize, f.fontSize) * 1.6;
+              if (sameRow && close) {
+                const gap = f.left - last.end;
+                last.text += (gap > last.fontSize * 0.25 ? ' ' : '') + f.text;
+                last.end = f.end;
+                last.w = last.end - last.left;
+                last.fontSize = Math.max(last.fontSize, f.fontSize);
+                last.top = Math.min(last.top, f.top);
+              } else {
+                lines.push({ text: f.text, left: f.left, top: f.top, fontSize: f.fontSize, w: f.w, end: f.end });
+              }
+            });
+
+            // 3) Juda kichik / bo'sh qatorlarni tashlaymiz, joyini canvas chegarasiga sig'diramiz
+            lines.forEach((ln) => {
+              const txt = (ln.text || '').trim();
+              if (!txt || txt.length < 1) return;
+              const fs = Math.round(ln.fontSize * 10) / 10;
+              let left = Math.max(4, Math.min(920, ln.left));
+              let top = Math.max(2, Math.min(520, ln.top));
+              let width = Math.max(30, Math.min(950 - left, Math.max(ln.w, fs * txt.length * 0.45) + fs));
+              // Fon rasm ustida matn ikki marta ko'rinmasin: matn qutisiga yengil fon beramiz
+              objects.push({
+                type: 'textbox',
+                text: txt,
+                left: left,
+                top: top,
+                width: width,
+                fontSize: fs,
+                fill: '#1a1a1a',
+                fontFamily: 'Arial',
+                originX: 'left',
+                originY: 'top',
+                textAlign: 'left',
+                lineHeight: 1.15,
+                selectable: true,
+                evented: true,
+                // Orqa fon rasm matnini yashirish uchun biroz opaq fon
+                backgroundColor: 'rgba(255,255,255,0.72)',
+                opacity: 1
+              });
+            });
+          } catch (e) { console.warn('PDF text extract v46.7:', e); }
+
           const slideJson = {
-            objects: [],
+            objects: objects,
             background: '#ffffff',
             backgroundImage: {
               type: 'image',
@@ -650,7 +730,9 @@
               scaleX: 960 / (c.width || 960),
               scaleY: 540 / (c.height || 540),
               originX: 'left',
-              originY: 'top'
+              originY: 'top',
+              selectable: false,
+              evented: false
             }
           };
           newSlides.push({ json: JSON.stringify(slideJson), thumb: dataUrl, imageNumbers: [] });
@@ -665,14 +747,16 @@
         updateSlideCounterUI();
         try { updateAllImageBadges(); } catch(e) {}
         recordGlobalState();
+        const hasText = newSlides.some(s => { try { return (JSON.parse(s.json).objects || []).length > 0; } catch(e) { return false; } });
         Swal.fire({
-          icon: 'info',
-          title: 'PDF ochildi (ko\'rish rejimi)',
-          html: n + ' ta sahifa rasm sifatida ochildi.<br><br>' +
-                '<b>To\'liq tahrirlash</b> uchun PDF ni <b>muharrirdan</b> eksport qiling<br>(u holda matn, rasm, shakl alohida qayta ochiladi).',
-          timer: 4500,
-          showConfirmButton: true,
-          confirmButtonText: 'Tushundim'
+          icon: 'success',
+          title: 'PDF ochildi (v46.7)',
+          html: n + ' ta sahifa ochildi.<br>' +
+                (hasText
+                  ? 'Matnlar tahrirlanadigan qilib joylashtirildi (fon rasm + matn).'
+                  : 'Matn topilmadi — faqat sahifa rasmi.'),
+          timer: 3200,
+          showConfirmButton: false
         });
       } catch (e) {
         Swal.fire('PDF xato', e.message || String(e), 'error');
