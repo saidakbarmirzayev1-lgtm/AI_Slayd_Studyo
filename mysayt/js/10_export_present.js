@@ -418,6 +418,35 @@
       try {
         const buf = await file.arrayBuffer();
 
+        // v46.1: Eng birinchi — raw baytlardan SS-META trailer / comment ni qidiramiz (pdf-lib dan oldin)
+        try {
+          const early = await ssExtractMeta(null, buf);
+          if (early) {
+            let jsonString = new TextDecoder().decode(early);
+            const fmtIdx = jsonString.indexOf('"format"');
+            if (fmtIdx > 0) {
+              const brace = jsonString.lastIndexOf('{', fmtIdx);
+              if (brace >= 0) jsonString = jsonString.slice(brace);
+            }
+            const meta = JSON.parse(jsonString);
+            if (meta && meta.format === 'slide-studio-layout' && Array.isArray(meta.slides) && meta.slides.length) {
+              slides = meta.slides.map((s) => ({
+                json: s.json || JSON.stringify({ objects: [], background: '#ffffff' }),
+                thumb: '',
+                imageNumbers: s.imageNumbers || []
+              }));
+              activeIndex = 0;
+              try { bumpObjectIdCounterFromSlides(); recalculateGlobalImageCounter(); } catch (e) {}
+              for (let i = 0; i < slides.length; i++) { try { await refreshSlideThumb(i); } catch (e) {} }
+              await loadSlideCanvasAsync(0);
+              renderSidebar(); updateSlideCounterUI(); recordGlobalState();
+              Swal.close();
+              showToast('PDF hybrid metadata: tahrirlanadigan slaydlar tiklandi');
+              return;
+            }
+          }
+        } catch (earlyErr) { console.warn('early meta:', earlyErr); }
+
         try {
           if (window.PDFLib && window.PDFLib.PDFDocument) {
             const { PDFDocument } = window.PDFLib;
@@ -572,6 +601,28 @@
             }
           }
         } catch (e) { console.warn('pdf.js attachments:', e); }
+        // v46.1: Agar bu Slide Studio o'zi yozgan PDF bo'lsa (meta topilmasa ham),
+        // ko'rinmas text-layer dan chiqqan "kichik matnlar pastki burchakda" muammosini oldini olamiz.
+        // Faqat sahifa rasmini slayd qilib ochamiz — dublikat / kichik matn yo'q.
+        let isSlideStudioPdf = false;
+        try {
+          const raw = new TextDecoder('latin1').decode(buf.slice(0, Math.min(buf.byteLength || buf.length, 2e6)));
+          if (raw.indexOf('slide-studio-layout') >= 0 || raw.indexOf('SS-META-BEGIN') >= 0 ||
+              raw.indexOf('Slide Studio') >= 0 || raw.indexOf('slide_studio_project') >= 0) {
+            isSlideStudioPdf = true;
+          }
+        } catch (_) {}
+        try {
+          if (!isSlideStudioPdf && pdf.getMetadata) {
+            const md = await pdf.getMetadata();
+            const info = (md && md.info) || {};
+            const subj = String(info.Subject || info.subject || '');
+            const creator = String(info.Creator || info.creator || '');
+            const keywords = String(info.Keywords || info.keywords || '');
+            if (/slide-studio/i.test(subj + creator + keywords)) isSlideStudioPdf = true;
+          }
+        } catch (_) {}
+
         const n = pdf.numPages;
         const newSlides = [];
         for (let i = 1; i <= n; i++) {
@@ -586,47 +637,51 @@
           const dataUrl = c.toDataURL('image/jpeg', 0.92);
 
           const objects = [];
-          try {
-            const textContent = await page.getTextContent();
-            const sx = 960 / viewport.width;
-            const sy = 540 / viewport.height;
-            const items = textContent.items || [];
+          // Faqat tashqi (oddiy) PDF'larda matn ajratib olamiz.
+          // Slide Studio PDF'larida matn qatlami opacity:0 va pozitsiya noto'g'ri chiqadi → o'tkazib yuboramiz.
+          if (!isSlideStudioPdf) {
+            try {
+              const textContent = await page.getTextContent();
+              const sx = 960 / viewport.width;
+              const sy = 540 / viewport.height;
+              const items = textContent.items || [];
 
-            const lines = [];
-            items.forEach((it) => {
-              const str = (it.str || '').trim();
-              if (!str) return;
-              const t = it.transform || [1, 0, 0, 1, 0, 0];
-              const x = t[4] * sx;
-              const y = (viewport.height - t[5]) * sy;
-              const fontSize = Math.max(10, Math.min(48, Math.abs(t[0] || t[3] || 12) * sy));
-              lines.push({ text: str, left: x, top: y - fontSize, fontSize });
-            });
-            lines.sort((a, b) => a.top - b.top || a.left - b.left);
-            const merged = [];
-            lines.forEach((ln) => {
-              const last = merged[merged.length - 1];
-              if (last && Math.abs(last.top - ln.top) < last.fontSize * 0.55 && ln.left - (last.left + last._w) < 40) {
-                last.text += ' ' + ln.text;
-                last._w = (ln.left - last.left) + ln.fontSize * ln.text.length * 0.5;
-              } else {
-                merged.push({ ...ln, _w: ln.fontSize * ln.text.length * 0.5 });
-              }
-            });
-            merged.slice(0, 40).forEach((ln, idx) => {
-              objects.push({
-                type: 'textbox',
-                text: ln.text,
-                left: Math.max(20, Math.min(880, ln.left)),
-                top: Math.max(20, Math.min(500, ln.top)),
-                width: Math.min(900, Math.max(120, ln._w || 400)),
-                fontSize: ln.fontSize,
-                fill: '#111827',
-                fontFamily: 'Arial',
-                selectable: true, evented: true
+              const lines = [];
+              items.forEach((it) => {
+                const str = (it.str || '').trim();
+                if (!str) return;
+                const t = it.transform || [1, 0, 0, 1, 0, 0];
+                const x = t[4] * sx;
+                const y = (viewport.height - t[5]) * sy;
+                const fontSize = Math.max(10, Math.min(48, Math.abs(t[0] || t[3] || 12) * sy));
+                lines.push({ text: str, left: x, top: y - fontSize, fontSize });
               });
-            });
-          } catch (e) {  }
+              lines.sort((a, b) => a.top - b.top || a.left - b.left);
+              const merged = [];
+              lines.forEach((ln) => {
+                const last = merged[merged.length - 1];
+                if (last && Math.abs(last.top - ln.top) < last.fontSize * 0.55 && ln.left - (last.left + last._w) < 40) {
+                  last.text += ' ' + ln.text;
+                  last._w = (ln.left - last.left) + ln.fontSize * ln.text.length * 0.5;
+                } else {
+                  merged.push({ ...ln, _w: ln.fontSize * ln.text.length * 0.5 });
+                }
+              });
+              merged.slice(0, 40).forEach((ln) => {
+                objects.push({
+                  type: 'textbox',
+                  text: ln.text,
+                  left: Math.max(20, Math.min(880, ln.left)),
+                  top: Math.max(20, Math.min(500, ln.top)),
+                  width: Math.min(900, Math.max(120, ln._w || 400)),
+                  fontSize: ln.fontSize,
+                  fill: '#111827',
+                  fontFamily: 'Arial',
+                  selectable: true, evented: true
+                });
+              });
+            } catch (e) {  }
+          }
 
           const slideJson = {
             objects,
