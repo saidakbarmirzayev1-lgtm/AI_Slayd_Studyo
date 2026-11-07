@@ -152,21 +152,17 @@ def esc(s: Any) -> str:
 # ----------------------------------------------------------------------------------------------
 # Matnlar
 # ----------------------------------------------------------------------------------------------
-BTN_NEW = "🎨 Yangi slayd yaratish"
-BTN_FILE = "📎 Fayl yuklash"
-BTN_MY = "📂 Slaydlarim / Tozalash"
-BTN_BAL = "💳 Balans / To'ldirish"
+BTN_NEW = "🎨 Yangi slayd"
+BTN_MY = "📂 Slaydlarim"
+BTN_BAL = "💳 Balans"
+BTN_PRO = "👑 Pro"
 BTN_SITE = "🌐 Saytga o'tish"
 BTN_SET = "⚙️ Sozlamalar"
-BTN_ABOUT = "ℹ️ Bot haqida"
-MENU = {BTN_NEW: "new", BTN_FILE: "file", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about"}
-
-try:
-    from backend import admin_panel as _admin
-except Exception as _ae:
-    _admin = None
-    print(f"[TG] admin_panel yuklanmadi: {_ae}")
-
+BTN_ABOUT = "ℹ️ Yordam"
+MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_PRO: "pro", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about",
+        # eski klaviaturalar (v45/v46) hali foydalanuvchilarda turgan bo'lishi mumkin:
+        "🎨 Yangi slayd yaratish": "new", "📂 Slaydlarim / Tozalash": "my", "💳 Balans / To'ldirish": "bal", "ℹ️ Bot haqida": "about"}
+LINE = "━━━━━━━━━━━━━━━━━━"
 DEFAULT_SLIDES = 8
 
 HELP = (
@@ -203,17 +199,7 @@ ABOUT = (
     "Bazada faqat akkaunt, balans va qisqa slayd matni qoladi.\n\n"
     "Savol bo'lsa /help ni bosing."
 )
-GREETING_RE = re.compile(
-    r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalaysan|qalay|nima gap|start|boshla|yahshimisiz|yaxshimisiz)[\s!.,?😊👋]*$",
-    re.I,
-)
-
-def _is_greeting(text: str) -> bool:
-    """Faqat salomlashuv — slayd mavzusi emas."""
-    t = (text or "").strip()
-    if not t or len(t) > 40:
-        return False
-    return bool(GREETING_RE.match(t))
+GREETING_RE = re.compile(r"^(salom|assalomu\s*alaykum|assalom|hello|hi|hey|привет|здравствуй\w*|qalay|nima gap|start|boshla)[\s!.,?]*$", re.I)
 COUNT_RE = re.compile(r"(\d{1,2})\s*(?:ta|tadan|ta\.)?\s*[-–]?\s*(?:slayd\w*|slaid\w*|slide\w*|слайд\w*|varaq\w*|sahifa\w*|page\w*)", re.I)
 MIN_SLIDES, MAX_SLIDES = 3, 20
 
@@ -228,24 +214,25 @@ def _btn(text: str, data: str) -> dict:
     return {"text": text, "callback_data": data}
 
 
+def _https() -> bool:
+    return SITE_URL.startswith("https://") and "localhost" not in SITE_URL and "127.0.0.1" not in SITE_URL
+
+
 def kb_reply() -> dict:
-    """Doimiy pastki menyu (foydalanuvchi har doim ko'radi)."""
+    """Doimiy pastki menyu: 2 ustunli, tartibli (v47)."""
+    last = [{"text": "🚀 Muharrir", "web_app": {"url": _app_url()}}] if _https() else [{"text": BTN_SITE}]
     return {
-        "keyboard": [
-            [{"text": BTN_NEW}],
-            [{"text": BTN_FILE}, {"text": BTN_MY}],
-            [{"text": BTN_BAL}, {"text": BTN_SET}],
-            [{"text": BTN_ABOUT}, {"text": BTN_SITE}],
-        ],
+        "keyboard": [[{"text": BTN_NEW}, {"text": BTN_MY}], [{"text": BTN_BAL}, {"text": BTN_PRO}], [{"text": BTN_SET}, {"text": BTN_ABOUT}], last],
         "resize_keyboard": True, "is_persistent": True, "input_field_placeholder": "Slayd mavzusini yozing…",
     }
 
 
 def kb_main(topic: str = "") -> dict:
-    return {"inline_keyboard": [
-        [{"text": "🚀 Muharrirda ochish (Mini App)", "web_app": {"url": _app_url(topic)}}],
-        [_btn("💎 Varaq sotib olish", "buy"), _btn("💳 Balans", "bal")],
-    ]}
+    rows = []
+    if _https():
+        rows.append([{"text": "🚀 Muharrirda ochish", "web_app": {"url": _app_url(topic)}}])
+    rows.append([_btn("👑 Pro", "pro"), _btn("💳 Balans", "bal")])
+    return {"inline_keyboard": rows}
 
 
 def kb_count(mode: str) -> dict:
@@ -289,12 +276,16 @@ def kb_themes() -> dict:
     return {"inline_keyboard": rows}
 
 
-def kb_balance(linked: bool) -> dict:
-    rows = [[_btn("💎 Varaq sotib olish", "buy")]]
+def kb_balance(linked: bool, info: Optional[dict] = None) -> dict:
+    info = info or {}
+    rows = []
+    if not info.get("unlimited"):
+        rows.append([_btn("👑 Pro olish" if info.get("plan") == "free" else "👑 Pro", "pro"), _btn("➕ Varaq sotib olish", "buy")])
     if not linked:
-        rows.append([_btn("🔗 Sayt akkauntini ulash", "linkinfo")])
-    rows.append([{"text": "🌐 Saytda ochish", "web_app": {"url": _app_url()}}])
-    return {"inline_keyboard": rows}
+        rows.append([_btn("🔗 Google akkauntni ulash", "linkinfo")])
+    if _https():
+        rows.append([{"text": "🌐 Saytda ochish", "web_app": {"url": _app_url()}}])
+    return {"inline_keyboard": rows or [[_btn("⬅️ Menyu", "dismiss")]]}
 
 
 
@@ -492,6 +483,8 @@ def _pages_left(usage: dict, mode: str) -> float:
 
 
 def _fmt_pages(x: float) -> str:
+    if float(x) >= 999999:
+        return "∞"
     x = round(float(x), 2)
     return str(int(x)) if x == int(x) else f"{x:.2f}".rstrip("0").rstrip(".")
 
@@ -518,11 +511,21 @@ async def _balance_info(user: dict) -> Optional[dict]:
         return None
     m = p.get("modes") or {}
     fast, deep = m.get("fast") or {}, m.get("deep") or {}
+    until = ""
+    try:
+        if p.get("plan_until"):
+            d = datetime.fromisoformat(str(p["plan_until"]).replace("Z", "+00:00"))
+            until = d.strftime("%d.%m.%Y")
+    except Exception:
+        pass
     return {
         "free": fast.get("free_pages", 0), "paid": fast.get("paid_pages", 0),
         "fast": fast.get("pages_exact", 0), "deep": deep.get("pages_exact", 0),
+        "daily": fast.get("free_daily_pages", 0),
         "wait": _fmt_wait(p.get("next_reset_in_seconds")) if p.get("window_started") else "",
         "linked": email != _tg_email(int(user["id"])), "email": email,
+        "plan": p.get("plan", "free"), "until": until, "unlimited": bool(p.get("unlimited")), "ad_free": bool(p.get("ad_free")),
+        "pro_price": p.get("pro_price_usd"), "pro_days": p.get("pro_days"), "pro_daily": (p.get("plans") or [{}, {}])[1].get("pages") if len(p.get("plans") or []) > 1 else None,
     }
 
 
@@ -531,26 +534,44 @@ def _mask_email(e: str) -> str:
     return (a[:1] + "***@" + d) if d else "***"
 
 
+def _bar(frac: float, n: int = 10) -> str:
+    frac = max(0.0, min(1.0, float(frac)))
+    k = int(round(frac * n))
+    return "▰" * k + "▱" * (n - k)
+
+
+def _plan_line(i: dict) -> str:
+    if i.get("unlimited") and i.get("plan") == "vip":
+        return "👑 <b>VIP</b> · cheksiz · reklamasiz"
+    if i.get("unlimited"):
+        return "♾ <b>Cheksiz</b> · reklamasiz"
+    if i.get("plan") == "pro":
+        return "👑 <b>Pro</b>" + (f" · <b>{i['until']}</b> gacha" if i.get("until") else " · muddatsiz") + " · reklamasiz"
+    return "🆓 <b>Bepul reja</b>"
+
+
 def _balance_block(i: dict) -> str:
+    if i.get("unlimited"):
+        return f"┌ {_plan_line(i)}\n└ ⚡ Varaqlar: <b>∞</b> (cheklovsiz)"
+    daily = float(i.get("daily") or 0) or 1.0
     lines = [
-        f"• Bepul balans: <b>{_fmt_pages(i['free'])}</b> varaq (bugun uchun)",
-        f"• Pullik balans: <b>{_fmt_pages(i['paid'])}</b> varaq",
+        f"┌ {_plan_line(i)}",
+        f"├ ⚡ Bepul: <code>{_bar(float(i['free']) / daily)}</code> <b>{_fmt_pages(i['free'])}</b>/{_fmt_pages(daily)}",
+        f"├ 💎 Paket: <b>{_fmt_pages(i['paid'])}</b> varaq",
     ]
-    if i.get("wait"):
-        lines.append(f"🔄 Bepul varaqlar yangilanishi: <b>{i['wait']}</b> dan keyin")
+    lines.append(f"└ 🔄 Yangilanish: <b>{i['wait']}</b> dan keyin" if i.get("wait") else "└ 🔄 Bepul varaqlar: birinchi so'rovdan 24 soat")
     return "\n".join(lines)
 
 
 def _welcome_text(name: str, info: Optional[dict]) -> str:
-    hello = f"Salom, <b>{esc(name)}</b>! 👋" if name else "Salom! 👋"
-    bal = ("\n\n💳 <b>Balansingiz:</b>\n" + _balance_block(info)) if info else ""
+    hello = f"👋 <b>Salom, {esc(name)}!</b>" if name else "👋 <b>Salom!</b>"
+    bal = (f"\n\n{LINE}\n<b>Hisobingiz</b>\n" + _balance_block(info)) if info else ""
     return (
-        f"{hello}\nMen <b>Slide Studio AI</b> botiman. 🎨\n\n"
-        "Bir necha daqiqada professional taqdimot tayyorlab beraman: mavzuni yozing — "
-        "AI slaydlarni yozadi va <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi.\n"
-        "Tayyor bo'lgach matn bilan tahrirlash ham mumkin: <i>«3-slaydni qisqartir»</i>. "
-        "Tayyor <b>.pptx</b> faylingizni yuborsangiz ham tahrirlayman."
-        f"{bal}\n\n👇 Pastdagi tugmalardan foydalaning yoki mavzuni yozing."
+        f"{hello}\n<b>Slide Studio AI</b> — mavzuni yozing, AI professional taqdimot tayyorlaydi.\n\n"
+        "📊 <b>PPTX</b> · 📕 <b>PDF</b> · 🌐 <b>HTML</b> — hammasi birdan.\n"
+        "✏️ Tayyor slaydni oddiy gap bilan tahrirlang: <i>«3-slaydni qisqartir»</i>.\n"
+        "📎 Rasm yoki <b>.pptx</b> yuborsangiz — muharrirda ochib beraman."
+        f"{bal}\n\n👇 Mavzuni yozing yoki pastdagi tugmalardan foydalaning."
     )
 
 
@@ -558,15 +579,12 @@ async def _credits_text(user: dict) -> str:
     i = await _balance_info(user)
     if not i:
         return "⚠️ Hozir balansni o'qib bo'lmadi. Birozdan keyin qayta urinib ko'ring."
-    link = (f"🔗 Sayt akkaunti: <b>ulangan</b> ({esc(_mask_email(i['email']))}) — balans saytda ham bir xil."
+    link = (f"🔗 Google: <b>ulangan</b> · {esc(_mask_email(i['email']))}\n<i>Balans sayt bilan bir xil.</i>"
             if i["linked"] else
-            "🔗 Sayt akkaunti: <b>ulanmagan</b>. Google bilan kirgan akkauntingiz balansi bilan birlashtirish uchun «Sayt akkauntini ulash» ni bosing "
-            "(Mini App orqali kirsangiz ham balans bir xil bo'ladi).")
-    return (
-        "💳 <b>Balansingiz</b>\n\n" + _balance_block(i) +
-        f"\n\n⚡ Tez AI: <b>{_fmt_pages(i['fast'])}</b> varaq · 🧠 Chuqur AI: <b>{_fmt_pages(i['deep'])}</b> varaq\n\n"
-        f"{link}\n\n<i>1 slayd = 1 varaq. Ko'proq kerak bo'lsa — «Varaq sotib olish».</i>"
-    )
+            "🔗 Google: <b>ulanmagan</b>\n<i>Ulasangiz sayt va bot balansi bitta bo'ladi.</i>")
+    cross = "" if i.get("unlimited") else f"\n\n⚡ Tez AI: <b>{_fmt_pages(i['fast'])}</b> varaq · 🧠 Chuqur AI: <b>{_fmt_pages(i['deep'])}</b> varaq"
+    tail = "" if i.get("unlimited") else "\n\n<i>1 slayd = 1 varaq (Chuqur AI — 3 baravar).</i>"
+    return f"💳 <b>Balans</b>\n{LINE}\n" + _balance_block(i) + cross + f"\n\n{link}" + tail
 
 
 async def _charge(uid: str, email: str, pages: int, tokens: int, mode: str, details: dict) -> Tuple[dict, int]:
@@ -824,36 +842,134 @@ def _unlink_sync(tid: int) -> bool:
         return False
 
 
-async def notify_purchase(user_id: str, pages: int, refund: bool = False) -> None:
-    """main.py to'lov webhook'idan chaqiriladi: balans bazada yangilangan — foydalanuvchiga darhol xabar."""
+def _tg_for_uid_sync(user_id: str) -> Optional[Tuple[int, str]]:
+    sb = _sb()
+    if not sb:
+        return None
+    email = ""
+    r = sb.table("user_usage").select("email").eq("user_id", user_id).limit(1).execute()
+    if r.data:
+        email = str(r.data[0].get("email") or "")
+    l = sb.table("tg_links").select("tg_id").eq("user_id", user_id).limit(1).execute()
+    if l.data:
+        return int(l.data[0]["tg_id"]), email
+    m = re.match(r"^tg(\d+)@t\.me$", email)
+    return (int(m.group(1)), email) if m else None
+
+
+async def notify_purchase(user_id: str, pages: int, refund: bool = False, kind: str = "pack") -> None:
+    """main.py to'lov webhook'idan: balans/reja bazada yangilangan — foydalanuvchiga darhol xabar."""
     if not ENABLED:
         return
-
-    def find() -> Optional[Tuple[int, str]]:
-        sb = _sb()
-        if not sb:
-            return None
-        email = ""
-        r = sb.table("user_usage").select("email").eq("user_id", user_id).limit(1).execute()
-        if r.data:
-            email = str(r.data[0].get("email") or "")
-        l = sb.table("tg_links").select("tg_id").eq("user_id", user_id).limit(1).execute()
-        if l.data:
-            return int(l.data[0]["tg_id"]), email
-        m = re.match(r"^tg(\d+)@t\.me$", email)
-        return (int(m.group(1)), email) if m else None
-
     try:
-        hit = await asyncio.to_thread(find)
+        hit = await asyncio.to_thread(_tg_for_uid_sync, user_id)
         if not hit:
             return
         tid, email = hit
+        if kind == "pro":
+            head = f"↩️ Pro to'lovi qaytarildi: <b>−{pages} kun</b>." if refund else f"👑 <b>Pro faollashtirildi!</b> +{pages} kun.\nEndi reklama ko'rinmaydi. Rahmat! 🎉"
+            await _send(tid, head, kb_main())
+            return
         usage = await asyncio.to_thread(_usage_now_sync, user_id, email)
         left = _pages_left(usage, "fast")
         head = f"↩️ To'lov qaytarildi: <b>−{pages}</b> varaq." if refund else f"✅ To'lov qabul qilindi: <b>+{pages}</b> varaq!"
         await _send(tid, f"{head}\n💳 Balansingiz: <b>{_fmt_pages(left)}</b> varaq", kb_main())
     except Exception as e:
         _warn("notify", f"to'lov xabari yuborilmadi: {str(e)[:100]}")
+
+
+async def notify_user(user_id: str, text: str) -> None:
+    """Admin amali (Pro berildi, varaq qo'shildi...) haqida foydalanuvchiga xabar (HTML)."""
+    if not ENABLED:
+        return
+    try:
+        hit = await asyncio.to_thread(_tg_for_uid_sync, str(user_id))
+        if hit:
+            await _send(hit[0], text, kb_main())
+    except Exception as e:
+        _warn("notify-user", f"xabar yuborilmadi: {str(e)[:100]}")
+
+
+async def admin_send(tid: int, text: str) -> bool:
+    """Ommaviy xabar (admin paneldan): oddiy matn (HTML belgilar escape qilinadi)."""
+    if not ENABLED:
+        return False
+    r = await tg("sendMessage", chat_id=int(tid), text=esc(text)[:4000], disable_web_page_preview=True)
+    return bool(r)
+
+
+# ----------------------------------------------------------------------------------------------
+# Admin: «admin» deb yozilsa — FAQAT tasdiqlangan admin (Telegram ID + ulangan Google email) ga panel ochiladi
+# ----------------------------------------------------------------------------------------------
+async def _admin_entry(cid: int, user: dict) -> bool:
+    """True = xabar qayta ishlandi. False = admin emas (oddiy xabar sifatida davom etiladi, hech narsa oshkor bo'lmaydi)."""
+    adm = _deps.get("admin")
+    if not adm or not adm.is_tg_admin(user.get("id")):
+        return False
+    chk = await asyncio.to_thread(adm.check_admin_tg, user["id"])
+    if chk.get("ok"):
+        url = adm.panel_url(SITE_URL, user["id"], chk["email"])
+        rows = []
+        if _https():
+            rows.append([{"text": "🛡 Admin panelni ochish", "web_app": {"url": url}}])
+            rows.append([{"text": "🌐 Brauzerda ochish", "url": url}])
+        await _send(cid, f"🛡 <b>Admin panel</b>\n{LINE}\nTasdiqlandi: Telegram + Google ({esc(_mask_email(chk['email']))}).\n"
+                         "Havola 3 soat amal qiladi va faqat sizga tegishli." + ("" if rows else f"\n\n<code>{esc(url)}</code>"),
+                    {"inline_keyboard": rows} if rows else None)
+    elif chk.get("reason") == "not_linked":
+        await _send(cid, "🛡 Siz admin sifatida tanildingiz, lekin Google akkauntingiz hali ulanmagan.\n"
+                         "Xavfsizlik uchun panel faqat <b>Telegram + admin Google akkaunti ulangan</b> bo'lganda ochiladi.",
+                    {"inline_keyboard": [[_btn("🔗 Google akkauntni ulash", "linkinfo")]]})
+    elif chk.get("reason") == "not_configured":
+        await _send(cid, "🛡 ADMIN_EMAILS env o'zgaruvchisi bo'sh. Render → Environment ga admin Google emailingizni yozing.")
+    else:
+        await _send(cid, f"🛡 Ulangan Google akkaunt (<b>{esc(_mask_email(chk.get('email') or ''))}</b>) ADMIN_EMAILS ro'yxatida yo'q. "
+                         "To'g'ri akkauntni ulang (/unlink, so'ng qayta ulang).")
+    return True
+
+
+# ----------------------------------------------------------------------------------------------
+# Reklama (Pro / VIP / admin ko'rmaydi)
+# ----------------------------------------------------------------------------------------------
+async def _maybe_ad(chat_id: int, uid: str, email: str) -> None:
+    """Natija yuborilgach — oraliq (sozlama) o'tgan bo'lsa bitta reklama. Hech qachon asosiy oqimni buzmaydi."""
+    try:
+        ads = _deps.get("ads")
+        if not ads or not ads.surface_enabled("bot") or not ads.bot_due(str(uid)):
+            return
+        usage = await asyncio.to_thread(_usage_now_sync, uid, email)
+        if _deps["usage_payload"](usage).get("ad_free"):
+            return
+        row = await asyncio.to_thread(ads.pick, "bot", False)
+        if not row:
+            return
+        ads.bot_mark(str(uid))
+        pub = ads.public(row, "bot")
+        text = ""
+        if pub["title"]:
+            text += f"<b>{esc(pub['title'])}</b>\n"
+        if pub["body"]:
+            text += f"{esc(pub['body'])}\n"
+        text += "\n<i>📢 Reklama · reklamasiz ishlash uchun 👑 Pro</i>"
+        rows = []
+        if pub["has_link"]:
+            rows.append([{"text": f"🔗 {pub['button_text']}", "url": SITE_URL + pub["click_url"]}])
+        rows.append([_btn("👑 Reklamasiz — Pro", "pro")])
+        kb = {"inline_keyboard": rows}
+        media = pub["media_url"]
+        if media and media.startswith("/"):
+            media = SITE_URL + media
+        sent = None
+        if media and pub["media_type"] == "image":
+            sent = await tg("sendPhoto", chat_id=chat_id, photo=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb)
+        elif media and pub["media_type"] == "video":
+            sent = await tg("sendVideo", chat_id=chat_id, video=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb, supports_streaming=True)
+        if not sent:
+            sent = await _send(chat_id, text, kb)
+        if sent:
+            await asyncio.to_thread(ads.bump, int(row["id"]), "impression")
+    except Exception as e:
+        _warn("ad", f"reklama yuborilmadi: {type(e).__name__}: {str(e)[:100]}")
 
 
 # ----------------------------------------------------------------------------------------------
@@ -1161,7 +1277,7 @@ def _no_credit_text(mode: str, usage: Optional[dict]) -> str:
     return (
         "😔 <b>Varaqlaringiz tugadi.</b>\n"
         + (f"Bepul varaqlar yangilanishiga: <b>{w}</b>.\n" if w else "Bepul varaqlar 24 soatda yangilanadi.\n")
-        + "Hoziroq davom etish uchun saytda «Sotib olish» orqali varaq oling."
+        + "Hoziroq davom etish uchun varaq sotib oling yoki 👑 Pro oling (reklamasiz, kuniga ko'proq varaq)."
     )
 
 
@@ -1230,6 +1346,7 @@ async def _run_generate(chat_id: int, user: dict, topic: str, n: int) -> None:
             f"💳 Sarflandi: <b>{_fmt_pages(spent)}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>{note}\n\n📦 Fayllar yuborilmoqda…",
         )
         await _send_files(chat_id, "all")
+        await _maybe_ad(chat_id, uid, email)
     except asyncio.TimeoutError:
         await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring (yoki ⚡ Tez AI rejimini tanlang: /mode).")
     except RuntimeError as e:
@@ -1318,6 +1435,7 @@ async def _run_edit(chat_id: int, user: dict, text: str) -> None:
             f"💳 Sarflandi: <b>{_fmt_pages(charged / _page_units(mode))}</b> varaq · Qoldi: <b>{_fmt_pages(left)}</b>\n\n📦 Yangi fayllar yuborilmoqda…",
         )
         await _send_files(chat_id, "all")
+        await _maybe_ad(chat_id, uid, email)
     except asyncio.TimeoutError:
         await _edit(chat_id, msg_id, "⌛ AI juda uzoq o'ylandi. Hech narsa yechilmadi — qayta urinib ko'ring.", kb_done(st))
     except Exception as e:
@@ -1344,14 +1462,6 @@ async def _send_files(chat_id: int, fmt: str) -> bool:
         imgs_q = await _fetch_images(deck, st.get("imgs") or {}, True)          # faqat yetishmayotgan rasmlar
         st["imgs"], st["img_ts"] = imgs_q, time.time()
         lang = st.get("lang", "uz")
-        # Reklama varog'i (PRO / admin bo'lmasa)
-        try:
-            from backend.admin_panel import should_show_ads
-            _u = await asyncio.to_thread(_usage_now_sync, st.get("uid") or f"tg:{chat_id}", st.get("email") or "")
-            if should_show_ads(_u, chat_id, st.get("email") or ""):
-                deck = decks.append_ad_slide(deck, True)
-        except Exception as _ad_e:
-            _warn("ad", str(_ad_e)[:80])
         if fmt == "all":
             files = await asyncio.to_thread(decks.export_all, deck, _img_index(deck, imgs_q), lang)
         else:
@@ -1617,23 +1727,66 @@ async def _do_clear(cid: int) -> None:
 
 async def _show_balance(cid: int, user: dict) -> None:
     i = await _balance_info(user)
-    await _send(cid, await _credits_text(user), kb_balance(bool(i and i["linked"])))
+    if not i:
+        await _send(cid, "⚠️ Hozir balansni o'qib bo'lmadi. Birozdan keyin qayta urinib ko'ring.", kb_main())
+        return
+    await _send(cid, await _credits_text(user), kb_balance(bool(i["linked"]), i))
 
 
-async def _do_buy(cid: int, user: dict) -> None:
+async def _show_pro(cid: int, user: dict) -> None:
+    """Pro tarif haqida karta + «Pro olish» tugmasi."""
+    i = await _balance_info(user)
+    if i and i.get("unlimited"):
+        await _send(cid, f"👑 <b>Pro / VIP</b>\n{LINE}\nSizda allaqachon <b>cheklovsiz</b> reja faol — reklamasiz va cheksiz varaq. Rahmat! 🙌", kb_main())
+        return
+    price = (i or {}).get("pro_price") or 0
+    days = (i or {}).get("pro_days") or 30
+    daily = (i or {}).get("pro_daily") or 0
+    cur = ""
+    if i and i.get("plan") == "pro":
+        cur = f"\n✅ Hozirgi Pro: <b>{i['until']}</b> gacha" if i.get("until") else "\n✅ Pro faol (muddatsiz)"
+    text = (
+        f"👑 <b>Slide Studio Pro</b>\n{LINE}\n"
+        "🚫 <b>Reklamasiz</b> — sayt va botda reklama ko'rsatilmaydi\n"
+        f"⚡ Har kuni <b>{_fmt_pages(daily)}</b> bepul varaq (oddiy rejada {_fmt_pages((i or {}).get('daily') or 0)})\n"
+        "🧠 Chuqur AI uchun ham ko'proq imkoniyat\n"
+        "🔗 Sayt va bot — bitta akkaunt, bitta balans\n\n"
+        f"💵 Narx: <b>${float(price):.2f}</b> · muddat: <b>{days} kun</b>{cur}"
+    )
+    kb = {"inline_keyboard": [[_btn("👑 Pro olish" if not cur else "👑 Muddatni uzaytirish", "buypro")],
+                              [_btn("➕ Varaq sotib olish", "buy"), _btn("💳 Balans", "bal")]]}
+    await _send(cid, text, kb)
+
+
+async def _do_buy(cid: int, user: dict, product: str = "pack") -> None:
+    is_pro = product == "pro"
+    res: Dict[str, Any] = {}
     try:
         uid, email = await _ensure_uid(user)
         fn = _deps.get("checkout")
-        res = await fn(uid, "" if email.endswith("@" + TG_EMAIL_DOMAIN) else email, SITE_URL) if fn else {"error": "no_checkout"}
+        res = await fn(uid, "" if email.endswith("@" + TG_EMAIL_DOMAIN) else email, SITE_URL, product) if fn else {"error": "no_checkout"}
     except Exception as e:
-        _warn("buy", f"checkout xatosi: {str(e)[:120]}")
-        res = {"error": "x"}
+        _warn("buy", f"checkout xatosi: {type(e).__name__}: {str(e)[:140]}")
+        res = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
     if res.get("url"):
-        info = f"💎 {res.get('pages')} varaq" + (f" — ${res.get('price')}" if res.get("price") else "")
-        await _send(cid, f"💎 <b>Varaq sotib olish</b>\n{info}\n\nTo'lovdan so'ng balansingiz bu yerda va saytda darhol yangilanadi.",
-                    {"inline_keyboard": [[{"text": "💳 To'lovga o'tish", "url": res["url"]}]]})
-    else:
-        await _send(cid, "⚙️ To'lov tizimi hozircha ishlamayapti. Birozdan keyin urinib ko'ring yoki saytdan sotib oling.", kb_main())
+        if is_pro:
+            info = f"👑 <b>Pro</b> · {res.get('days') or ''} kun" + (f" — <b>${res.get('price')}</b>" if res.get("price") else "")
+            tail = "To'lovdan so'ng Pro darhol yoqiladi, reklama o'chadi."
+        else:
+            info = f"💎 <b>{res.get('pages')} varaq</b>" + (f" — <b>${res.get('price')}</b>" if res.get("price") else "")
+            tail = "To'lovdan so'ng balans bu yerda va saytda darhol yangilanadi."
+        await _send(cid, f"🧾 <b>Buyurtma tayyor</b>\n{LINE}\n{info}\n\n{tail}",
+                    {"inline_keyboard": [[{"text": "💳 To'lovga o'tish", "url": res["url"]}], [_btn("⬅️ Orqaga", "pro" if is_pro else "bal")]]})
+        return
+    # xato: oddiy foydalanuvchiga mayin matn, ADMINGA — aniq sabab (sozlash uchun)
+    reason = str(res.get("error") or "") + ((" — " + str(res.get("hint"))) if res.get("hint") else "")
+    adm = _deps.get("admin")
+    if adm and adm.is_tg_admin(user.get("id")):
+        await _send(cid, f"🛠 <b>To'lov sozlanmagan</b> (faqat sizga ko'rinadi)\n<code>{esc(reason[:600])}</code>\n\n"
+                         "Tekshiring: LEMON_SQUEEZY_API_KEY, _STORE_ID, _VARIANT_ID" + (", <b>_PRO_VARIANT_ID</b>" if is_pro else "") +
+                         ", _WEBHOOK_SECRET.\nVaqtincha: admin paneldan foydalanuvchiga Pro/varaq qo'lda bering.", kb_main())
+        return
+    await _send(cid, "⚙️ To'lov tizimi hozircha ishlamayapti. Birozdan keyin urinib ko'ring yoki saytdan sotib oling.", kb_main())
 
 
 async def _link_help(cid: int) -> None:
@@ -1678,13 +1831,14 @@ async def _show_settings(cid: int, user: dict, mid: Optional[int] = None) -> Non
     else:
         acc = "🔗 Google akkaunt: holatni hozir o'qib bo'lmadi."
         first = [_btn("🔗 Google akkauntni ulash", "linkinfo")]
-    text = (f"⚙️ <b>Sozlamalar</b>\n\n{acc}\n\n🤖 AI rejimi: <b>{'🧠 Chuqur' if deep else '⚡ Tez'}</b>\n"
+    plan = f"\n{_plan_line(info)}" if info else ""
+    text = (f"⚙️ <b>Sozlamalar</b>\n{LINE}\n{acc}{plan}\n\n🤖 AI rejimi: <b>{'🧠 Chuqur' if deep else '⚡ Tez'}</b>\n"
             "<i>1 Telegram = 1 Google akkaunt. Uzsangiz bot o'zining Telegram akkauntiga qaytadi, sayt akkaunti balansi o'zgarmaydi.</i>")
     kb = {"inline_keyboard": [
         first,
         [_btn(("✅ " if not deep else "") + "⚡ Tez AI", "smode:fast"), _btn(("✅ " if deep else "") + "🧠 Chuqur AI", "smode:deep")],
-        [_btn("💳 Balans", "bal"), _btn("ℹ️ Bot haqida", "about")],
-        [{"text": "🌐 Saytda ochish", "web_app": {"url": _app_url()}}],
+        [_btn("💳 Balans", "bal"), _btn("👑 Pro", "pro")],
+        [_btn("ℹ️ Yordam", "about")] + ([{"text": "🌐 Sayt", "web_app": {"url": _app_url()}}] if _https() else []),
     ]}
     await _edit(cid, mid, text, kb)
 
@@ -1696,17 +1850,12 @@ async def _menu_action(cid: int, user: dict, action: str) -> None:
         await _send(cid, "🎨 <b>Slayd mavzusini yozing</b>, masalan:\n<i>«Sun'iy intellekt va uning kelajagi»</i>\n\n"
                          "Xohlasangiz batafsil yozing: <i>«10 ta slayd, tibbiyotda SI, yashil rang, rasmsiz»</i>.\n"
                          f"Yozishingiz bilan AI tayyorlab, <b>PPTX · PDF · HTML</b> fayllarni birdan yuboradi. (Odatda {DEFAULT_SLIDES} ta slayd)")
-    elif action == "file":
-        st["awaiting"] = None
-        await _send(cid, "📎 <b>Faylni shu yerga yuboring</b>\n\n"
-                         "Qo'llanadi: <b>PPTX, PDF, HTML, rasm, GIF, video</b> (15 MB gacha).\n\n"
-                         "• PPTX — matn o'qiladi, AI bilan tahrirlash mumkin\n"
-                         "• PDF / rasm / video — muharrirda ochish tugmasi chiqadi\n\n"
-                         "<i>Faylni oddiy xabar qilib yuboring (📎 qog'oz ignasi orqali).</i>")
     elif action == "my":
         await _show_my(cid)
     elif action == "bal":
         await _show_balance(cid, user)
+    elif action == "pro":
+        await _show_pro(cid, user)
     elif action == "site":
         await _send(cid, f"🌐 <b>Slide Studio</b> — to'liq muharrir (Mini App)\n{esc(SITE_URL)}", kb_main())
     elif action == "set":
@@ -1727,27 +1876,15 @@ async def _handle_callback(cb: dict) -> None:
     if data in ("credits", "bal"):
         await _show_balance(cid, user)
     elif data == "buy":
-        await _do_buy(cid, user)
+        await _do_buy(cid, user, "pack")
+    elif data == "pro":
+        await _show_pro(cid, user)
+    elif data == "buypro":
+        await _do_buy(cid, user, "pro")
     elif data == "linkinfo":
         await _link_help(cid)
     elif data == "dismiss":
         await tg("editMessageReplyMarkup", chat_id=cid, message_id=mid, reply_markup={"inline_keyboard": []})
-    elif data.startswith("adm:"):
-        if not await _admin_guard(user):
-            await _send(cid, "⛔ Faqat admin.")
-        elif data == "adm:broadcast":
-            await _admin_broadcast(cid, user, "")
-        elif data == "adm:stats":
-            await _admin_stats(cid, user)
-        elif data == "adm:pro":
-            await _send(cid, "⭐ PRO berish: <code>/admin pro TELEGRAM_ID</code>")
-        elif data == "adm:unlimited":
-            await _send(cid, "♾️ Cheksiz: <code>/admin unlimited TELEGRAM_ID</code>")
-        elif data == "adm:refill":
-            await _send(cid, "🔋 Limit: <code>/admin refill TELEGRAM_ID</code>")
-        elif data == "adm:adinfo":
-            cfg = _admin.ad_config() if _admin else {}
-            await _send(cid, f"ℹ️ Reklama (.env)\nenabled={cfg.get('enabled')}\ntitle={esc(cfg.get('title') or '')}\nurl={esc(cfg.get('url') or '')}")
     elif data == "about":
         await _send(cid, ABOUT, kb_main())
     elif data.startswith("smode:"):
@@ -1849,15 +1986,8 @@ async def _handle_text(chat_id: int, user: dict, text: str) -> None:
     if st.get("busy"):
         await _send(chat_id, "⏳ Oldingi so'rov hali bajarilmoqda — biroz kuting.")
         return
-    # Salom / greeting — HECH QACHON slayd yasamaydi (hatto «Yangi slayd» kutayotganda ham)
-    if _is_greeting(text):
-        if st.get("awaiting") == "topic":
-            st["awaiting"] = None
+    if GREETING_RE.match(text):
         await _send_welcome(chat_id, user)
-        return
-    if st.get("awaiting") == "admin_broadcast":
-        st["awaiting"] = None
-        await _admin_broadcast(chat_id, user, text)
         return
     if st.get("awaiting") == "topic":                      # «🎨 Yangi slayd» bosilgan — bu xabar mavzu
         topic = " ".join(text.split())[:1500]
@@ -1882,186 +2012,6 @@ async def _send_welcome(chat_id: int, user: dict) -> None:
         await _send(chat_id, "🔗 <b>Google akkauntingizni ulang</b>\nShunda sayt va bot BITTA balansdan foydalanadi: botda to'lasangiz saytda ham, saytda to'lasangiz botda ham ko'payadi.\n"
                              "<i>1 Telegram = 1 Google akkaunt. Keyin «⚙️ Sozlamalar» orqali uzish ham mumkin.</i>",
                     {"inline_keyboard": [[_btn("🔗 Google akkauntni ulash", "linkinfo")], [_btn("Keyinroq", "dismiss")]]})
-
-
-
-async def _admin_guard(user: dict) -> bool:
-    if not _admin:
-        return False
-    return _admin.is_admin_tg(user.get("id"))
-
-
-async def _admin_panel_kb() -> dict:
-    return {"inline_keyboard": [
-        [_btn("📣 Reklama yuborish", "adm:broadcast"), _btn("📊 Statistika", "adm:stats")],
-        [_btn("⭐ PRO berish", "adm:pro"), _btn("♾️ Cheksiz balans", "adm:unlimited")],
-        [_btn("🔋 Bugungi limit to'ldirish", "adm:refill"), _btn("ℹ️ Reklama sozlamasi", "adm:adinfo")],
-        [_btn("⬅️ Yopish", "dismiss")],
-    ]}
-
-
-async def _admin_show(chat_id: int, user: dict) -> None:
-    if not await _admin_guard(user):
-        await _send(chat_id, "⛔ Bu buyruq faqat admin uchun.")
-        return
-    cfg = _admin.ad_config() if _admin else {}
-    ad_state = "yoqilgan" if cfg.get("enabled") else "ochirilgan"
-    text = (
-        "🛡 <b>Admin panel</b>\n\n"
-        f"Reklama: <b>{ad_state}</b>\n"
-        f"Sarlavha: {esc(cfg.get('title') or '-')}\n"
-        f"URL: {esc(cfg.get('url') or '-')}\n\n"
-        "Buyruqlar:\n"
-        "• <code>/admin pro TG_ID</code> — PRO + katta balans\n"
-        "• <code>/admin unlimited TG_ID</code> — cheksiz\n"
-        "• <code>/admin refill TG_ID</code> — bugungi bepul limitni toldirish\n"
-        "• <code>/admin broadcast Matn...</code> — barcha bot foydalanuvchilariga xabar\n"
-        "• Reklama matni/URL .env dagi AD_* orqali\n"
-    )
-    await _send(chat_id, text, await _admin_panel_kb())
-
-
-async def _admin_broadcast(chat_id: int, user: dict, text: str) -> None:
-    if not await _admin_guard(user):
-        await _send(chat_id, "⛔ Faqat admin.")
-        return
-    msg = (text or "").strip()
-    if not msg:
-        st = _state(chat_id)
-        st["awaiting"] = "admin_broadcast"
-        await _send(chat_id, "📣 Reklama matnini yuboring (HTML mumkin). Bekor: /admin")
-        return
-    # tg_id lar: RAM + supabase tg_links
-    targets = set()
-    try:
-        for cid in list(_chats.keys()):
-            targets.add(int(cid))
-    except Exception:
-        pass
-    try:
-        sb = _sb()
-        if sb:
-            rows = sb.table("tg_links").select("tg_id").limit(5000).execute().data or []
-            for r in rows:
-                try:
-                    targets.add(int(r["tg_id"]))
-                except Exception:
-                    pass
-    except Exception as e:
-        _warn("admin", f"tg_links: {e}")
-    targets.discard(int(chat_id))
-    ok = fail = 0
-    status = await _send(chat_id, f"📣 Yuborilmoqda… {len(targets)} ta foydalanuvchi")
-    mid = (status or {}).get("message_id") if isinstance(status, dict) else None
-    for tid in list(targets):
-        try:
-            r = await tg("sendMessage", chat_id=tid, text=msg[:4000], parse_mode="HTML", disable_web_page_preview=True)
-            if r:
-                ok += 1
-            else:
-                fail += 1
-        except Exception:
-            fail += 1
-        await asyncio.sleep(0.05)
-    await _edit(chat_id, mid, f"✅ Reklama yuborildi.\nMuvaffaqiyat: <b>{ok}</b>\nXato: <b>{fail}</b>")
-
-
-async def _admin_set_pro(chat_id: int, user: dict, target_tg: str, unlimited: bool = False) -> None:
-    if not await _admin_guard(user):
-        await _send(chat_id, "⛔ Faqat admin.")
-        return
-    try:
-        tid = int(str(target_tg).strip())
-    except Exception:
-        await _send(chat_id, "Telegram ID noto'g'ri. Masalan: <code>/admin pro 123456789</code>")
-        return
-    # Find linked user_id/email
-    uid = email = None
-    try:
-        sb = _sb()
-        if sb:
-            rows = sb.table("tg_links").select("user_id,email").eq("tg_id", tid).limit(1).execute().data or []
-            if rows:
-                uid, email = rows[0].get("user_id"), rows[0].get("email")
-    except Exception as e:
-        _warn("admin", f"link: {e}")
-    if not uid:
-        # synthetic telegram account
-        uid = f"tg:{tid}"
-        email = f"tg_{tid}@telegram.local"
-    try:
-        usage = await asyncio.to_thread(_usage_now_sync, uid, email or "")
-        pages = _admin.PRO_PAGES if _admin else 999999
-        usage = _deps["add_paid_credits"](usage, pages)
-        usage["is_pro"] = True
-        if unlimited:
-            usage["unlimited"] = True
-        await asyncio.to_thread(_deps["save_usage"], uid, usage, 0)
-        # try persist is_pro column
-        try:
-            sb = _sb()
-            if sb:
-                sb.table("user_usage").update({"is_pro": True, "paid_credits": int(usage.get("paid_credits") or 0)}).eq("user_id", uid).execute()
-        except Exception:
-            pass
-        kind = "♾️ Cheksiz PRO" if unlimited else "⭐ PRO"
-        await _send(chat_id, f"✅ {kind} berildi.\nTG: <code>{tid}</code>\nUID: <code>{esc(str(uid))}</code>")
-        try:
-            await _send(tid, f"🎉 Sizga <b>{kind}</b> berildi! Reklama ko'rsatilmaydi, balans yangilandi.")
-        except Exception:
-            pass
-    except Exception as e:
-        await _send(chat_id, f"⚠️ Xato: {esc(str(e)[:120])}")
-
-
-async def _admin_refill(chat_id: int, user: dict, target_tg: str) -> None:
-    if not await _admin_guard(user):
-        await _send(chat_id, "⛔ Faqat admin.")
-        return
-    try:
-        tid = int(str(target_tg).strip())
-    except Exception:
-        await _send(chat_id, "Telegram ID noto'g'ri.")
-        return
-    uid = email = None
-    try:
-        sb = _sb()
-        if sb:
-            rows = sb.table("tg_links").select("user_id,email").eq("tg_id", tid).limit(1).execute().data or []
-            if rows:
-                uid, email = rows[0].get("user_id"), rows[0].get("email")
-    except Exception:
-        pass
-    if not uid:
-        uid = f"tg:{tid}"
-        email = f"tg_{tid}@telegram.local"
-    try:
-        usage = await asyncio.to_thread(_usage_now_sync, uid, email or "")
-        # free daily reset
-        from backend.monitoring import FREE_DAILY_UNITS
-        usage["free_credits"] = FREE_DAILY_UNITS
-        usage["last_reset_time"] = __import__("datetime").datetime.utcnow().isoformat()
-        await asyncio.to_thread(_deps["save_usage"], uid, usage, 0)
-        await _send(chat_id, f"✅ Bugungi bepul limit to'ldirildi.\nTG: <code>{tid}</code>")
-    except Exception as e:
-        await _send(chat_id, f"⚠️ {esc(str(e)[:120])}")
-
-
-async def _admin_stats(chat_id: int, user: dict) -> None:
-    if not await _admin_guard(user):
-        await _send(chat_id, "⛔ Faqat admin.")
-        return
-    n_ram = len(_chats)
-    n_links = 0
-    try:
-        sb = _sb()
-        if sb:
-            r = sb.table("tg_links").select("tg_id", count="exact").execute()
-            n_links = getattr(r, "count", None) or len(r.data or [])
-    except Exception:
-        pass
-    await _send(chat_id, f"📊 <b>Statistika</b>\n\nBot sessiyalari (RAM): <b>{n_ram}</b>\nUlangan akkauntlar (tg_links): <b>{n_links}</b>")
-
 
 
 async def handle_update(data: dict) -> None:
@@ -2120,7 +2070,14 @@ async def handle_update(data: dict) -> None:
         elif cmd in ("/credits", "/kredit", "/kreditlar", "/balance", "/balans"):
             await _show_balance(chat_id, user)
         elif cmd == "/buy":
-            await _do_buy(chat_id, user)
+            await _do_buy(chat_id, user, "pack")
+        elif cmd == "/pro":
+            await _show_pro(chat_id, user)
+        elif cmd == "/id":
+            await _send(chat_id, f"🆔 Sizning Telegram ID: <code>{int(user['id'])}</code>")
+        elif cmd == "/admin":
+            if not await _admin_entry(chat_id, user):
+                await _send(chat_id, HELP, kb_reply())
         elif cmd == "/link":
             if arg:
                 await _do_link(chat_id, user, arg)
@@ -2135,28 +2092,15 @@ async def handle_update(data: dict) -> None:
             await _menu_action(chat_id, user, "set")
         elif cmd in ("/about", "/bot"):
             await _menu_action(chat_id, user, "about")
-        elif cmd == "/admin":
-            parts2 = arg.split(maxsplit=1) if arg else []
-            sub = (parts2[0].lower() if parts2 else "")
-            rest = parts2[1] if len(parts2) > 1 else ""
-            if not sub:
-                await _admin_show(chat_id, user)
-            elif sub == "broadcast":
-                await _admin_broadcast(chat_id, user, rest)
-            elif sub == "pro":
-                await _admin_set_pro(chat_id, user, rest, unlimited=False)
-            elif sub in ("unlimited", "inf", "cheksiz"):
-                await _admin_set_pro(chat_id, user, rest, unlimited=True)
-            elif sub == "refill":
-                await _admin_refill(chat_id, user, rest)
-            elif sub == "stats":
-                await _admin_stats(chat_id, user)
-            else:
-                await _admin_show(chat_id, user)
         else:
             await _send(chat_id, HELP, kb_reply())
         return
 
+    if re.fullmatch(r"(?i)\s*admin(\s*panel)?\s*[!.]?\s*", text):          # «admin» — faqat haqiqiy adminga panel ochiladi
+        if await _admin_entry(chat_id, user):
+            return
+        await _send(chat_id, "✍️ Slayd mavzusini batafsilroq yozing, masalan: <i>«Sun'iy intellekt kelajagi»</i>.", kb_reply())
+        return
     await _handle_text(chat_id, user, text)
 
 
@@ -2414,13 +2358,13 @@ async def _set_commands() -> None:
         {"command": "new", "description": "Yangi slayd yaratish"},
         {"command": "my", "description": "Slaydlarim"},
         {"command": "clear", "description": "Slaydlarimni tozalash"},
-        {"command": "credits", "description": "Balans / to'ldirish"},
+        {"command": "credits", "description": "Balans"},
+        {"command": "pro", "description": "Pro tarif — reklamasiz"},
         {"command": "link", "description": "Sayt akkauntini ulash"},
         {"command": "settings", "description": "Sozlamalar (Google ulash / uzish)"},
         {"command": "about", "description": "Bot haqida"},
         {"command": "mode", "description": "Tez ⚡ / Chuqur 🧠 AI"},
         {"command": "help", "description": "Yordam"},
-        {"command": "admin", "description": "Admin panel (faqat admin)"},
     ])
     await tg("setChatMenuButton", menu_button={"type": "web_app", "text": "🚀 Muharrir", "web_app": {"url": _app_url()}})
 

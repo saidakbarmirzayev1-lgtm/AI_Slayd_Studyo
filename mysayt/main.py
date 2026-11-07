@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 try:
@@ -30,6 +30,7 @@ except ImportError:
     Client = None
 
 from backend.media_search import search as media_search_impl, first_gif_url
+from backend import appsettings, ads as ads_mod, admin_core      # v47: admin panel, reklama, Pro, sozlamalar
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -59,6 +60,9 @@ try:
         mode_for_model,
         PAGES_PER_PACK,
         CHECKOUT_PRICE_USD,
+        plan_active, is_unlimited, is_ad_free, extend_pro, shorten_pro,
+        pack_pages, pack_units, free_daily_units, rt,
+        PRO_PRICE_USD, PRO_DAYS,
     )
 except ImportError as _mon_err:
     print(f"[ERROR] backend/monitoring.py yuklanmadi: {_mon_err}")
@@ -473,16 +477,16 @@ def is_blocked(key: str) -> bool:
         s = active_sessions.get(key)
         return bool(s and s.get("blocked"))
 
-def get_or_create_user_usage(user_id: str, email: str) -> dict:
+def _get_or_create_user_usage_raw(user_id: str, email: str) -> dict:
     now_iso = datetime.now(timezone.utc).isoformat()
     default = normalize_user_row({
         "user_id": user_id, "email": email or "",
         "total_tokens": 0, "daily_tokens": 0,
-        "free_credits": FREE_DAILY_UNITS,
+        "free_credits": free_daily_units(),
         "paid_credits": 0,
         "prompt_count": 0,
         "last_reset_time": now_iso,
-        "slide_credits": FREE_DAILY_UNITS,
+        "slide_credits": free_daily_units(),
         "blocked": False,
     })
     if not supabase or not user_id or str(user_id).startswith(("dev-", "anon-", "guest-")):
@@ -522,11 +526,11 @@ def get_or_create_user_usage(user_id: str, email: str) -> dict:
         new_u = {
             "user_id": user_id, "email": safe_email,
             "total_tokens": 0, "daily_tokens": 0,
-            "free_credits": FREE_DAILY_UNITS,
+            "free_credits": free_daily_units(),
             "paid_credits": 0,
             "prompt_count": 0,
             "last_reset_time": now_iso,
-            "slide_credits": FREE_DAILY_UNITS,
+            "slide_credits": free_daily_units(),
             "blocked": False,
         }
         try:
@@ -537,7 +541,7 @@ def get_or_create_user_usage(user_id: str, email: str) -> dict:
             legacy = {
                 "user_id": user_id, "email": safe_email,
                 "total_tokens": 0, "daily_tokens": 0,
-                "slide_credits": FREE_DAILY_UNITS, "blocked": False,
+                "slide_credits": free_daily_units(), "blocked": False,
             }
             try:
                 supabase.table("user_usage").insert(legacy).execute()
@@ -548,6 +552,15 @@ def get_or_create_user_usage(user_id: str, email: str) -> dict:
     except Exception as e:
         print(f"[USAGE] {e}")
         return default
+
+def get_or_create_user_usage(user_id: str, email: str) -> dict:
+    """v47: + VIP bayrog'i (admin Google email / admin Telegram akkaunti) — cheksiz va reklamasiz."""
+    u = _get_or_create_user_usage_raw(user_id, email)
+    try:
+        u["vip"] = bool(admin_core.is_vip_account(str(user_id or ""), (email or u.get("email") or "")))
+    except Exception:
+        u["vip"] = False
+    return u
 
 def save_user_credits(user_id: str, user: dict, tokens_add: int = 0):
     """free/paid/prompt/last_reset + tokens yozish."""
@@ -821,13 +834,13 @@ try:
         supabase_getter=lambda: supabase,
         get_usage=get_or_create_user_usage,
         usage_payload=usage_payload,
-        free_daily_pages=FREE_DAILY_PAGES,
+        free_daily_pages=rt("free_daily_pages"),
         # v44: botda AI orqali slayd yaratish va kredit yechish
         apply_reset=apply_24h_reset,
         charge=charge_for_ai_turn,
         save_usage=save_user_credits,
         ledger_log=lambda *a, **k: ledger_log(*a, **k),   # v44.1: ledger_log pastroqda e'lon qilingan -> kech bog'lanadi (NameError tuzatildi)
-        total_credits=total_credits,
+        total_credits=lambda u: (10 ** 9 if is_unlimited(u) else total_credits(u)),   # v47: cheksiz/VIP uchun bot hech qachon "varaq tugadi" demaydi
         MODES=MODES,
         checkout=lambda *a, **k: _checkout_for_bot(*a, **k),   # v45: botdan to'lov havolasi (kech bog'lanadi — NameError bo'lmasin)
         ai=lambda: {
@@ -842,6 +855,37 @@ except Exception as _tg_err:
     tgbot = None
     import traceback; traceback.print_exc()
     print(f"[TG] bot moduli yuklanmadi: {_tg_err}")
+
+# ---------------------------------------------------------------------------------------------
+# v47: sozlamalar, reklama, admin yadrosi ulanishi
+# ---------------------------------------------------------------------------------------------
+appsettings.configure(lambda: supabase)
+ads_mod.configure(lambda: supabase)
+
+def _admin_state() -> dict:
+    with sessions_lock:
+        n = len(active_sessions)
+    return {"ws_live": ws_count, "sessions": n}
+
+def _set_paused(v: bool) -> None:
+    (server_paused.set if v else server_paused.clear)()
+
+def _set_ai_key(k: str) -> None:
+    config["api_key"] = k
+    os.environ["AI_API_KEY"] = k
+
+admin_core.configure(
+    supabase_getter=lambda: supabase,
+    ledger_log=lambda *a, **k: ledger_log(*a, **k),
+    config=lambda: config,
+    secret_hint=lambda: config.get("supabase_secret_key") or "",
+    state=_admin_state, paused=lambda: server_paused.is_set(),
+    set_paused=_set_paused, set_ai_key=_set_ai_key,
+)
+if tgbot is not None:
+    admin_core.configure(tg_send=tgbot.admin_send, tg_notify=tgbot.notify_user)
+    tgbot.configure(admin=admin_core, ads=ads_mod, settings=appsettings)
+app.include_router(admin_core.router)
 
 _bg_tasks: set = set()
 
@@ -874,6 +918,11 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan_v43(_app):
     """Start/stop: yangi FastAPI/Starlette'da add_event_handler yo'q, shuning uchun lifespan ishlatiladi."""
+    try:
+        admin_core.configure(loop=asyncio.get_running_loop())
+        await asyncio.to_thread(appsettings.load, True)
+    except Exception as e:
+        print(f"[ADMIN] ishga tushirish: {str(e)[:100]}")
     t = asyncio.create_task(_housekeeping_loop())
     _bg_tasks.add(t)
     t.add_done_callback(_bg_tasks.discard)
@@ -914,12 +963,16 @@ def public_config():
     return {
         "supabase_url": config.get("supabase_url"),
         "supabase_publishable_key": config.get("supabase_publishable_key"),
-        "free_daily": FREE_DAILY_PAGES,
-        "pack_pages": PAGES_PER_PACK,
+        "free_daily": rt("free_daily_pages"),
+        "pack_pages": pack_pages(),
         "pack_price_usd": CHECKOUT_PRICE_USD,
+        "pro_price_usd": PRO_PRICE_USD,
+        "pro_days": PRO_DAYS,
+        "pro_enabled": bool(_ls_env().get("pro_variant_id")),
+        "announcement": appsettings.get("announcement", ""),
         "unit": UNIT,
         "modes": {k: {"page_units": v["page"], "chat_units": v["chat"], "search_units": v["search"],
-                      "free_daily_pages": FREE_DAILY_UNITS // v["page"], "pack_pages": PACK_UNITS // v["page"]}
+                      "free_daily_pages": free_daily_units() // v["page"], "pack_pages": pack_units() // v["page"]}
                   for k, v in MODES.items()},
     }
 
@@ -979,7 +1032,7 @@ def ledger_spent(user_id: str, since_iso):
 def user_usage(token: str = ""):
     if not supabase or not token:
         u = normalize_user_row({
-            "free_credits": FREE_DAILY_UNITS,
+            "free_credits": free_daily_units(),
             "paid_credits": 0,
             "prompt_count": 0,
             "last_reset_time": datetime.now(timezone.utc).isoformat(),
@@ -1004,10 +1057,11 @@ def billing_plans():
     return {
         "plans": plans_public(),
         "checkout_price_usd": CHECKOUT_PRICE_USD,
-        "pages_per_pack": PAGES_PER_PACK,
-        "deep_pages_per_pack": PACK_UNITS // MODES["deep"]["page"],
-        "free_daily": FREE_DAILY_PAGES,
-        "deep_free_daily": FREE_DAILY_UNITS // MODES["deep"]["page"],
+        "pages_per_pack": pack_pages(),
+        "deep_pages_per_pack": pack_units() // MODES["deep"]["page"],
+        "free_daily": rt("free_daily_pages"),
+        "deep_free_daily": free_daily_units() // MODES["deep"]["page"],
+        "pro_price_usd": PRO_PRICE_USD, "pro_days": PRO_DAYS, "pro_daily_pages": rt("pro_daily_pages"),
         "note": "Lemon Squeezy komissiyasi: 5% + $0.50 — narxni shunga qarab belgilang",
     }
 
@@ -1016,6 +1070,7 @@ def _ls_env():
         "api_key": (os.environ.get("LEMON_SQUEEZY_API_KEY") or "").strip(),
         "store_id": (os.environ.get("LEMON_SQUEEZY_STORE_ID") or "").strip(),
         "variant_id": (os.environ.get("LEMON_SQUEEZY_VARIANT_ID") or "").strip(),
+        "pro_variant_id": (os.environ.get("LEMON_SQUEEZY_PRO_VARIANT_ID") or "").strip(),
         "secret": (os.environ.get("LEMON_SQUEEZY_WEBHOOK_SECRET") or "").strip(),
         "test_mode": (os.environ.get("LEMON_SQUEEZY_TEST_MODE") or "").strip() in ("1", "true", "yes"),
         "base_url": (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/"),
@@ -1029,6 +1084,7 @@ def payment_health():
         "api_key": bool(e["api_key"]),
         "store_id": bool(e["store_id"]),
         "variant_id": bool(e["variant_id"]),
+        "pro_variant_id": bool(e["pro_variant_id"]),
         "webhook_secret": bool(e["secret"]),
         "test_mode": e["test_mode"],
         "public_base_url": e["base_url"] or None,
@@ -1073,14 +1129,22 @@ async def create_lemon_checkout(payload: Dict[str, Any] = None):
         return JSONResponse({"error": "Sessiya tugagan. Qayta kiring."}, status_code=401)
     user_id = user_res.user.id
     user_email = (user_res.user.email or payload.get("email") or "").strip()
-    code, data = await _build_checkout(user_id, user_email, str(payload.get("return_url") or ""))
+    product = "pro" if str(payload.get("product") or "").lower() == "pro" else "pack"
+    code, data = await _build_checkout(user_id, user_email, str(payload.get("return_url") or ""), product)
     return data if code == 200 else JSONResponse(data, status_code=code)
 
 
-async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
+async def _build_checkout(user_id, user_email: str, return_url_hint: str = "", product: str = "pack"):
     """v45: sayt VA Telegram bot uchun umumiy checkout yaratish. (http_status, dict) qaytaradi."""
     ls = _ls_env()
-    if not ls["api_key"] or not ls["store_id"] or not ls["variant_id"]:
+    is_pro = product == "pro"
+    variant = ls["pro_variant_id"] if is_pro else ls["variant_id"]
+    if is_pro and not variant:
+        return 503, {
+            "error": "Pro to'lovi hali sozlanmagan",
+            "hint": "Lemon Squeezy'da Pro mahsulot yarating va LEMON_SQUEEZY_PRO_VARIANT_ID ni env'ga yozing (yoki admin paneldan Pro'ni qo'lda bering)",
+        }
+    if not ls["api_key"] or not ls["store_id"] or not variant:
         return 503, {
             "error": "Lemon Squeezy sozlanmagan",
             "hint": ".env ga LEMON_SQUEEZY_API_KEY, LEMON_SQUEEZY_STORE_ID, LEMON_SQUEEZY_VARIANT_ID yozing",
@@ -1089,12 +1153,12 @@ async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
     return_url = ls["base_url"] or str(return_url_hint or "").strip().rstrip("/")
     if return_url and not return_url.startswith(("http://", "https://")):
         return_url = ""
-    checkout_data: Dict[str, Any] = {"custom": {"user_id": str(user_id)}}
+    checkout_data: Dict[str, Any] = {"custom": {"user_id": str(user_id), "product": "pro" if is_pro else "pack"}}
     if user_email:
         checkout_data["email"] = user_email
-    product_options: Dict[str, Any] = {"name": f"Slide Studio — {PAGES_PER_PACK} varaq"}
+    product_options: Dict[str, Any] = {"name": (f"Slide Studio Pro — {PRO_DAYS} kun" if is_pro else f"Slide Studio — {pack_pages()} varaq")}
     try:
-        product_options["enabled_variants"] = [int(ls["variant_id"])]
+        product_options["enabled_variants"] = [int(variant)]
     except ValueError:
         pass
     if return_url:
@@ -1113,7 +1177,7 @@ async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
         "attributes": attributes,
         "relationships": {
             "store": {"data": {"type": "stores", "id": str(ls["store_id"])}},
-            "variant": {"data": {"type": "variants", "id": str(ls["variant_id"])}},
+            "variant": {"data": {"type": "variants", "id": str(variant)}},
         },
     }}
     try:
@@ -1123,7 +1187,9 @@ async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
     if "json" in res:
         url = ((res["json"].get("data") or {}).get("attributes") or {}).get("url")
         if url:
-            return 200, {"checkout_url": url, "pages": PAGES_PER_PACK, "price_usd": CHECKOUT_PRICE_USD}
+            if is_pro:
+                return 200, {"checkout_url": url, "days": PRO_DAYS, "price_usd": PRO_PRICE_USD, "product": "pro"}
+            return 200, {"checkout_url": url, "pages": pack_pages(), "price_usd": CHECKOUT_PRICE_USD, "product": "pack"}
         return 502, {"error": "Lemon Squeezy checkout URL qaytarmadi"}
     code = res.get("status")
     print(f"[LEMON CHECKOUT] HTTP {code}: {res.get('error_body')}")
@@ -1138,12 +1204,12 @@ async def _build_checkout(user_id, user_email: str, return_url_hint: str = ""):
     return 502, {"error": msg, "ls_status": code, "detail": res.get("error_body", "")[:300]}
 
 
-async def _checkout_for_bot(user_id: str, email: str = "", return_url: str = "") -> dict:
+async def _checkout_for_bot(user_id: str, email: str = "", return_url: str = "", product: str = "pack") -> dict:
     """v45: Telegram bot «To'ldirish» tugmasi uchun. {'url','pages','price'} yoki {'error'}."""
-    code, data = await _build_checkout(user_id, (email or "").strip(), return_url)
+    code, data = await _build_checkout(user_id, (email or "").strip(), return_url, product)
     if code == 200:
-        return {"url": data["checkout_url"], "pages": data.get("pages"), "price": data.get("price_usd")}
-    return {"error": data.get("error") or "checkout_error"}
+        return {"url": data["checkout_url"], "pages": data.get("pages"), "days": data.get("days"), "price": data.get("price_usd"), "product": product}
+    return {"error": data.get("error") or "checkout_error", "hint": data.get("hint") or data.get("detail") or ""}
 
 _processed_orders: set = set()
 
@@ -1217,13 +1283,18 @@ async def lemon_webhook(request: Request):
         return {"ok": True, "ignored": event_name}
 
     item = attrs.get("first_order_item") or {}
-    if ls["variant_id"] and str(item.get("variant_id") or "") not in ("", ls["variant_id"]):
+    vid = str(item.get("variant_id") or "")
+    known = {x for x in (ls["variant_id"], ls["pro_variant_id"]) if x}
+    if known and vid not in known | {""}:
         return {"ok": True, "ignored": "other_variant"}
+    cust_product = str(((meta.get("custom_data") or {}).get("product")) or "")
+    is_pro_order = bool(ls["pro_variant_id"]) and (vid == ls["pro_variant_id"] or (vid == "" and cust_product == "pro"))
     try:
         qty = max(1, min(10, int(item.get("quantity") or 1)))
     except (TypeError, ValueError):
         qty = 1
-    pages = PAGES_PER_PACK * qty
+    pages = pack_pages() * qty
+    pro_days = PRO_DAYS * qty
 
     user_id = str(((meta.get("custom_data") or {}).get("user_id")) or "").strip()
     if not user_id or user_id == "unknown":
@@ -1236,8 +1307,27 @@ async def lemon_webhook(request: Request):
         return {"ok": True, "ignored": f"status={attrs.get('status')}"}
 
     key = f"{'refund' if event_name == 'order_refunded' else 'order'}-{order_id or secrets.token_hex(6)}"
-    if not _claim_order(key, user_id, pages):
+    if not _claim_order(key, user_id, pro_days if is_pro_order else pages):
         return {"ok": True, "duplicate": True}
+    if is_pro_order:                                   # v47: Pro obuna (muddatli) — kredit emas, reja uzaytiriladi
+        try:
+            refund = event_name == "order_refunded"
+            async with _user_lock(user_id):
+                u = await asyncio.to_thread(get_or_create_user_usage, user_id, str(attrs.get("user_email") or ""))
+                u = shorten_pro(u, pro_days) if refund else extend_pro(u, pro_days)
+                await asyncio.to_thread(admin_core._update_user, user_id, {"plan": u["plan"], "plan_until": u.get("plan_until")})
+                await asyncio.to_thread(ledger_log, user_id, "pro_refund" if refund else "pro_purchase", pro_days, u, 0, {"order": order_id, "days": pro_days})
+            print(f"[LEMON WEBHOOK] PRO {event_name}: {'-' if refund else '+'}{pro_days} kun → {user_id} (test={attrs.get('test_mode')})")
+            if tgbot is not None:
+                try:
+                    asyncio.create_task(tgbot.notify_purchase(str(user_id), pro_days, refund, "pro"))
+                except Exception:
+                    pass
+            return {"ok": True, "user_id": user_id, "plan": u.get("plan"), "plan_until": u.get("plan_until"), "days": pro_days}
+        except Exception as e:
+            _release_order(key)
+            print(f"[LEMON WEBHOOK] PRO xato: {e}")
+            return JSONResponse({"error": str(e)[:200]}, status_code=500)
     try:
         async with _user_lock(user_id):
             u = await asyncio.to_thread(get_or_create_user_usage, user_id, str(attrs.get("user_email") or ""))
@@ -1259,6 +1349,86 @@ async def lemon_webhook(request: Request):
         _release_order(key)
         print(f"[LEMON WEBHOOK] xato: {e}")
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+# ---------------------------------------------------------------------------------------------
+# v47: REKLAMA (sayt chap paneli + bot), ADMIN kirish punkti
+# ---------------------------------------------------------------------------------------------
+_adfree_cache: Dict[str, Any] = {}
+
+def _bearer(request: Request, fallback: str = "") -> str:
+    h = (request.headers.get("authorization") or "").strip()
+    if h.lower().startswith("bearer "):
+        return h[7:].strip()
+    return (fallback or "").strip()
+
+def _ad_free_for_token(token: str) -> bool:
+    """Token → reklamasiz (Pro/VIP/admin/cheksiz)mi? 60 soniya keshlanadi. Mehmon (token yo'q) → False."""
+    if not token or token == "dev-token" or not supabase:
+        return False
+    hit = _adfree_cache.get(token)
+    if hit and time.time() - hit[1] < 60:
+        return hit[0]
+    ok = False
+    try:
+        r = supabase.auth.get_user(token)
+        if r and r.user:
+            u = get_or_create_user_usage(r.user.id, r.user.email or "")
+            ok = bool(is_ad_free(u))
+    except Exception:
+        ok = False
+    if len(_adfree_cache) > 3000:
+        _adfree_cache.clear()
+    _adfree_cache[token] = (ok, time.time())
+    return ok
+
+@app.get("/api/ads/next")
+async def ads_next(request: Request, surface: str = "site", token: str = "", exclude: int = 0):
+    """Sayt reklamasi. Pro/VIP/admin uchun har doim {"ad": null}."""
+    tok = _bearer(request, token)
+    ad_free = await asyncio.to_thread(_ad_free_for_token, tok)
+    row = None if ad_free else await asyncio.to_thread(ads_mod.pick, "site", False, exclude or None)
+    if not row:
+        return JSONResponse({"ad": None}, headers={"Cache-Control": "no-store"})
+    asyncio.get_running_loop().run_in_executor(None, ads_mod.bump, int(row["id"]), "impression")
+    return JSONResponse({"ad": ads_mod.public(row, "site")}, headers={"Cache-Control": "no-store"})
+
+@app.get("/api/ads/click/{ad_id}")
+async def ads_click(ad_id: int, s: str = "site"):
+    row = await asyncio.to_thread(ads_mod.get_row, ad_id)
+    link = str((row or {}).get("link_url") or "")
+    if not row or not ads_mod.valid_http_url(link):
+        raise HTTPException(404, "Topilmadi")
+    asyncio.get_running_loop().run_in_executor(None, ads_mod.bump, int(ad_id), "click")
+    return RedirectResponse(link, status_code=302, headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"})
+
+@app.get("/api/ads/media/{ad_id}")
+async def ads_media(ad_id: int):
+    row = await asyncio.to_thread(ads_mod.get_row, ad_id)
+    dec = ads_mod.decode_data_url(str((row or {}).get("media_url") or ""))
+    if not row or not dec or not row.get("active"):
+        raise HTTPException(404, "Topilmadi")
+    data, mime = dec
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+@app.post("/api/me/admin-entry")
+async def me_admin_entry(payload: Dict[str, Any] = None):
+    """Faqat tasdiqlangan admin (Google admin emaili + unga ulangan admin Telegram) uchun yashirin panel havolasi.
+    Boshqalarga HAR DOIM 404 — panel mavjudligi bilinmaydi."""
+    nf = JSONResponse({"detail": "Not Found"}, status_code=404)
+    token = str((payload or {}).get("token") or "").strip()
+    if not token or token == "dev-token" or not supabase:
+        return nf
+    try:
+        r = await asyncio.to_thread(supabase.auth.get_user, token)
+        if not r or not r.user:
+            return nf
+        chk = await asyncio.to_thread(admin_core.check_admin_user, str(r.user.id), r.user.email or "")
+    except Exception:
+        return nf
+    if not chk.get("ok"):
+        return nf
+    return {"url": "/_a/" + admin_core.make_token(chk["tg_id"], chk["email"])}
+
 
 import ipaddress, socket, urllib.request, urllib.parse, urllib.error
 MAX_PROXY_IMAGE_BYTES = 15 * 1024 * 1024  # v26: 8MB dan katta rasmlar (AI fon) uchun
@@ -1803,6 +1973,9 @@ async def ws_chat(websocket: WebSocket):
             if usage.get("blocked"):
                 await websocket.send_json({"type": "error", "message": "Akkaunt bloklangan."})
                 continue
+            if appsettings.get("maintenance") and not is_unlimited(usage):
+                await websocket.send_json({"type": "error", "code": "maintenance", "message": appsettings.get("maintenance_text")})
+                continue
 
             usage = apply_24h_reset(usage)
             bill_mode = mode_for_model(model)
@@ -1815,7 +1988,7 @@ async def ws_chat(websocket: WebSocket):
                 await websocket.send_json({
                     "type": "error",
                     "code": "LIMIT_EXCEEDED",
-                    "message": f"Limit tugadi.{_alt} 24 soat kuting yoki ${CHECKOUT_PRICE_USD:.2f} ga {PAGES_PER_PACK} Tez-varaq ({PACK_UNITS // MODES['deep']['page']} Chuqur-varaq) sotib oling.",
+                    "message": f"Limit tugadi.{_alt} 24 soat kuting, ${CHECKOUT_PRICE_USD:.2f} ga {pack_pages()} Tez-varaq ({pack_units() // MODES['deep']['page']} Chuqur-varaq) sotib oling yoki Pro oling.",
                     **payload,
                 })
                 continue
@@ -1825,8 +1998,8 @@ async def ws_chat(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "message": "Sessiya bloklangan."})
                 continue
             msg_n = bump_msg(session_key)
-            daily = int(config.get("daily_message_limit", 200))
-            if msg_n > daily:
+            daily = int(appsettings.get("daily_message_limit", config.get("daily_message_limit", 200)) or 0)
+            if daily and msg_n > daily and not is_unlimited(usage):
                 await websocket.send_json({"type": "error",
                                            "message": f"Kunlik limit ({daily}) tugadi."})
                 continue

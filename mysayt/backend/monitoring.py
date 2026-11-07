@@ -43,6 +43,36 @@ CHECKOUT_PRICE_USD = _env_num("PACK_PRICE_USD", 1.00, float)
 FREE_DAILY_UNITS = FREE_DAILY_PAGES * UNIT
 PACK_UNITS = PAGES_PER_PACK * UNIT
 
+# ---- v47: Pro / VIP / cheksiz + admin paneldan o'zgartiriladigan limitlar ----
+PRO_DAILY_PAGES = _env_num("PRO_DAILY_PAGES", 60, int)       # Pro: kuniga Tez-varaq
+PRO_PRICE_USD = _env_num("PRO_PRICE_USD", 5.00, float)
+PRO_DAYS = _env_num("PRO_DAYS", 30, int)
+_RT: Dict[str, Any] = {"free_daily_pages": FREE_DAILY_PAGES, "pro_daily_pages": PRO_DAILY_PAGES, "pack_pages": PAGES_PER_PACK}
+
+def rt(name: str) -> int:
+    return int(_RT[name])
+
+def set_runtime(**kw: Any) -> None:
+    """Admin paneldan: bepul kunlik / Pro kunlik / paket hajmi (Tez-varaq hisobida)."""
+    for k, v in kw.items():
+        if k in _RT and v is not None:
+            try:
+                _RT[k] = max(0, min(100000, int(v)))
+            except (TypeError, ValueError):
+                pass
+
+def free_daily_units() -> int:
+    return rt("free_daily_pages") * UNIT
+
+def pro_daily_units() -> int:
+    return rt("pro_daily_pages") * UNIT
+
+def pack_pages() -> int:
+    return rt("pack_pages")
+
+def pack_units() -> int:
+    return rt("pack_pages") * UNIT
+
 MODES: Dict[str, Dict[str, int]] = {
     "fast": {"page": UNIT,             "chat": UNIT // 4, "search": UNIT // 5, "chat_per_page": 4, "search_per_page": 5},
     "deep": {"page": UNIT * DEEP_MULT, "chat": UNIT * DEEP_MULT // 4, "search": UNIT * DEEP_MULT // 4, "chat_per_page": 4, "search_per_page": 4},
@@ -355,14 +385,54 @@ def calculate_page_cost_from_reply(
 ) -> Tuple[int, List[Dict[str, Any]]]:
     return calculate_page_cost(extract_actions_from_reply(full_reply or ""), total_slides, active_slide)
 
+
+def plan_active(user: Optional[dict]) -> str:
+    """'free' | 'pro' | 'vip' (muddati tugagan Pro/VIP = free)."""
+    user = user or {}
+    p = str(user.get("plan") or "free").strip().lower()
+    if p not in ("pro", "vip"):
+        return "vip" if user.get("vip") else "free"
+    until = _parse_ts(user.get("plan_until"))
+    if until is not None and until < _now():
+        return "vip" if user.get("vip") else "free"
+    return p
+
+def is_unlimited(user: Optional[dict]) -> bool:
+    user = user or {}
+    return bool(user.get("unlimited")) or bool(user.get("vip")) or plan_active(user) == "vip"
+
+def is_ad_free(user: Optional[dict]) -> bool:
+    return is_unlimited(user) or plan_active(user) in ("pro", "vip")
+
+def daily_units_for(user: Optional[dict]) -> int:
+    """Shu foydalanuvchining kunlik bepul chegarasi (BIRLIK): admin belgilagan > Pro > oddiy."""
+    user = user or {}
+    ov = user.get("daily_units_override")
+    try:
+        if ov is not None and str(ov) != "":
+            return max(0, int(ov))
+    except (TypeError, ValueError):
+        pass
+    if plan_active(user) in ("pro", "vip"):
+        return max(free_daily_units(), pro_daily_units())
+    return free_daily_units()
+
 def plans_public() -> List[Dict[str, Any]]:
-    return list(PLANS)
+    fd, pk = rt("free_daily_pages"), rt("pack_pages")
+    return [
+        {"id": "free", "name": "Bepul", "pages": fd, "deep_pages": fd // DEEP_MULT,
+         "price_usd": 0, "price_display": "Bepul", "renew": "24 soat"},
+        {"id": "pro", "name": "Pro", "pages": rt("pro_daily_pages"), "deep_pages": rt("pro_daily_pages") // DEEP_MULT,
+         "price_usd": PRO_PRICE_USD, "price_display": f"${PRO_PRICE_USD:.2f}", "renew": f"{PRO_DAYS} kun", "ads": False},
+        {"id": f"pack_{pk}", "name": f"{pk} varaq", "pages": pk, "deep_pages": pk // DEEP_MULT,
+         "price_usd": CHECKOUT_PRICE_USD, "price_display": f"${CHECKOUT_PRICE_USD:.2f}", "renew": "tugamaguncha"},
+    ]
 
 def normalize_user_row(u: Optional[dict], default_free: int = None) -> dict:
     """DB qatorini to'ldiradi. free_credits/paid_credits = BIRLIK."""
-    if default_free is None:
-        default_free = FREE_DAILY_UNITS
     u = dict(u or {})
+    if default_free is None:
+        default_free = daily_units_for(u)
     if "free_credits" not in u and "paid_credits" not in u:
         u["free_credits"] = default_free
         u["paid_credits"] = 0
@@ -374,13 +444,15 @@ def normalize_user_row(u: Optional[dict], default_free: int = None) -> dict:
         u["last_reset_time"] = _now().isoformat()
     u["slide_credits"] = u["free_credits"] + u["paid_credits"]
     u["blocked"] = bool(u.get("blocked", False))
+    u["plan"] = str(u.get("plan") or "free").lower()
+    u["unlimited"] = bool(u.get("unlimited", False))
     return u
 
 def apply_24h_reset(user: dict, free_daily: int = None) -> dict:
     """>=24 soat -> free_credits = FREE_DAILY_UNITS."""
-    if free_daily is None:
-        free_daily = FREE_DAILY_UNITS
     user = normalize_user_row(user, free_daily)
+    if free_daily is None:
+        free_daily = daily_units_for(user)
     now = _now()
     last = _parse_ts(user.get("last_reset_time"))
     if last is None or (now - last) >= timedelta(hours=24):
@@ -393,17 +465,10 @@ def apply_24h_reset(user: dict, free_daily: int = None) -> dict:
 
 def window_started(user: dict, free_daily: int = None) -> bool:
     """24 soatlik oyna faqat birinchi sarfdan keyin boshlanadi."""
-    if free_daily is None:
-        free_daily = FREE_DAILY_UNITS
     u = normalize_user_row(user, free_daily)
+    if free_daily is None:
+        free_daily = daily_units_for(u)
     return int(u.get("free_credits") or 0) < int(free_daily)
-
-
-try:
-    from backend.admin_panel import user_is_pro as _user_is_pro
-except Exception:
-    def _user_is_pro(user):
-        return bool(user and (user.get("is_pro") or user.get("unlimited")))
 
 def seconds_until_reset(user: dict) -> int:
     user = normalize_user_row(user)
@@ -419,9 +484,13 @@ def total_credits(user: dict) -> int:
 
 def can_afford(user: dict, mode: str = "fast") -> bool:
     """Shu rejimda kamida 1 ta savol-javobga yetadimi."""
+    if is_unlimited(user):
+        return not bool((user or {}).get("blocked"))
     return total_credits(user) >= MODES.get(mode, MODES["fast"])["chat"]
 
 def pages_left(user: dict, mode: str = "fast") -> int:
+    if is_unlimited(user):
+        return 999999
     return total_credits(user) // MODES.get(mode, MODES["fast"])["page"]
 
 def deduct_credits(user: dict, amount: int) -> dict:
@@ -444,15 +513,11 @@ def charge_for_ai_turn(user: dict, pages_from_actions: int, searches: int = 0, m
       aks holda (faqat chat)  -> chat
       searches * search
     Balansdan oshmaydi. Returns: (user, charged_units, reason)
-    PRO / unlimited — bepul (0).
     """
     c = MODES.get(mode if mode in MODES else "fast")
     user = apply_24h_reset(user)
-    try:
-        if _user_is_pro(user):
-            return user, 0, "pro_free"
-    except Exception:
-        pass
+    if is_unlimited(user):                      # v47: VIP / admin / "cheksiz" — hech narsa yechilmaydi
+        return user, 0, "unlimited"
     if not window_started(user):
         user["last_reset_time"] = _now().isoformat()
     pages_from_actions = max(0, int(pages_from_actions or 0))
@@ -479,35 +544,45 @@ def usage_payload(user: dict) -> dict:
     user = apply_24h_reset(user)
     free, paid = int(user["free_credits"]), int(user["paid_credits"])
     total = free + paid
+    unl = is_unlimited(user)
+    plan = plan_active(user)
+    fdu = daily_units_for(user)
     modes = {}
     for name, c in MODES.items():
         modes[name] = {
             "page_units": c["page"], "chat_units": c["chat"], "search_units": c["search"],
             "chat_per_page": c["chat_per_page"], "search_per_page": c["search_per_page"],
-            "pages_left": total // c["page"], "pages_exact": _fmt_pages(total, c["page"]),
+            "pages_left": 999999 if unl else total // c["page"],
+            "pages_exact": 999999 if unl else _fmt_pages(total, c["page"]),
             "free_pages": _fmt_pages(free, c["page"]), "paid_pages": _fmt_pages(paid, c["page"]),
-            "free_daily_pages": FREE_DAILY_UNITS // c["page"], "pack_pages": PACK_UNITS // c["page"],
-            "can_chat": total >= c["chat"],
+            "free_daily_pages": fdu // c["page"], "pack_pages": pack_units() // c["page"],
+            "can_chat": True if unl else total >= c["chat"],
         }
     spent = user.get("spent_24h")
     return {
         "free_credits": free,                 # BIRLIK
         "paid_credits": paid,                 # BIRLIK
         "units_total": total,
-        "free_daily_units": FREE_DAILY_UNITS,
-        "pack_units": PACK_UNITS,
+        "free_daily_units": fdu,
+        "pack_units": pack_units(),
         "modes": modes,
         "slide_credits": total,
-        "slide_credits_left": total // UNIT,
+        "slide_credits_left": 999999 if unl else total // UNIT,
         "prompt_count": 0,
         "search_count": 0,
         "spent_24h": spent,                   # BIRLIK (yoki None)
         "next_reset_in_seconds": seconds_until_reset(user),
         "window_started": window_started(user),
-        "is_pro": bool(user.get("is_pro") or user.get("unlimited") or paid > 0),
-        "free_daily": FREE_DAILY_PAGES,
-        "pack_pages": PAGES_PER_PACK,
+        "is_pro": plan in ("pro", "vip") or unl,          # v47: haqiqiy Pro/VIP (oldin: paid>0)
+        "plan": plan,                                      # free | pro | vip
+        "plan_until": user.get("plan_until") if plan == "pro" else None,
+        "unlimited": unl,
+        "ad_free": is_ad_free(user),
+        "free_daily": fdu // UNIT,
+        "pack_pages": pack_pages(),
         "pack_price_usd": CHECKOUT_PRICE_USD,
+        "pro_price_usd": PRO_PRICE_USD,
+        "pro_days": PRO_DAYS,
         "blocked": bool(user.get("blocked", False)),
         "plans": plans_public(),
     }
@@ -515,7 +590,7 @@ def usage_payload(user: dict) -> dict:
 def add_paid_credits(user: dict, pages: int = None) -> dict:
     """pages = TEZ-varaq hisobida (1 varaq = 20 birlik)."""
     if pages is None:
-        pages = PAGES_PER_PACK
+        pages = pack_pages()
     user = normalize_user_row(user)
     user["paid_credits"] = int(user["paid_credits"]) + max(0, int(pages)) * UNIT
     user["slide_credits"] = user["free_credits"] + user["paid_credits"]
@@ -524,8 +599,39 @@ def add_paid_credits(user: dict, pages: int = None) -> dict:
 def remove_paid_credits(user: dict, pages: int = None) -> dict:
     """Qaytarilgan (refund) to'lov uchun."""
     if pages is None:
-        pages = PAGES_PER_PACK
+        pages = pack_pages()
     user = normalize_user_row(user)
     user["paid_credits"] = max(0, int(user["paid_credits"]) - max(0, int(pages)) * UNIT)
     user["slide_credits"] = user["free_credits"] + user["paid_credits"]
+    return user
+
+
+# ---------------------------------------------------------------------------------------------
+# v47: Pro rejasi (muddatli). Muddati tugasa avtomatik 'free' ga qaytadi (plan_active).
+# ---------------------------------------------------------------------------------------------
+def extend_pro(user: dict, days: int = None) -> dict:
+    """Pro muddatini `days` ga uzaytiradi (faol bo'lsa — oxiridan, bo'lmasa — hozirdan)."""
+    if days is None:
+        days = PRO_DAYS
+    user = normalize_user_row(user)
+    base = _now()
+    cur = _parse_ts(user.get("plan_until"))
+    if plan_active(user) == "pro" and cur and cur > base:
+        base = cur
+    user["plan"] = "pro"
+    user["plan_until"] = (base + timedelta(days=max(0, int(days)))).isoformat()
+    return user
+
+def shorten_pro(user: dict, days: int = None) -> dict:
+    """Qaytarilgan (refund) Pro to'lovi: muddatdan `days` ayiriladi; o'tib ketsa — free."""
+    if days is None:
+        days = PRO_DAYS
+    user = normalize_user_row(user)
+    cur = _parse_ts(user.get("plan_until"))
+    if cur:
+        cur = cur - timedelta(days=max(0, int(days)))
+        user["plan_until"] = cur.isoformat()
+        if cur <= _now():
+            user["plan"] = "free"
+            user["plan_until"] = None
     return user

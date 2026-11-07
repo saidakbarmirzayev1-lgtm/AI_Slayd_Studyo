@@ -771,25 +771,6 @@ def safe_filename(title: str, ext: str) -> str:
     return f"{base}.{ext}"
 
 
-
-def append_ad_slide(deck: dict, show: bool = True) -> dict:
-    """PRO bo'lmaganlarga oxiriga reklama varog'i."""
-    if not show or not deck:
-        return deck
-    try:
-        from backend.admin_panel import ad_config, make_ad_slide
-        if not ad_config().get("enabled"):
-            return deck
-        slides = list(deck.get("slides") or [])
-        if slides and slides[-1].get("_ad"):
-            return deck
-        slides.append(make_ad_slide())
-        deck = dict(deck)
-        deck["slides"] = slides
-    except Exception as e:
-        print("[tg_decks] ad slide:", e)
-    return deck
-
 def export(deck: dict, images: Optional[Dict[int, bytes]], fmt: str, lang: str = "uz") -> Tuple[str, bytes, str]:
     """(fayl_nomi, bayt, mime) qaytaradi. fmt: pptx | pdf | html."""
     scenes = build_scenes(deck, images, lang)

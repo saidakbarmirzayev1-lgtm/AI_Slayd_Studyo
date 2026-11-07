@@ -44,5 +44,17 @@ services:
         sync: false
       - key: LEMON_SQUEEZY_VARIANT_ID
         sync: false
+      - key: LEMON_SQUEEZY_PRO_VARIANT_ID
+        sync: false
       - key: LEMON_SQUEEZY_WEBHOOK_SECRET
+        sync: false
+      - key: PRO_PRICE_USD
+        value: "5.00"
+      - key: PRO_DAYS
+        value: "30"
+      - key: PRO_DAILY_PAGES
+        value: "60"
+      - key: ADMIN_TG_IDS
+        sync: false
+      - key: ADMIN_EMAILS
         sync: false

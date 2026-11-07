@@ -18,6 +18,10 @@
     next_reset_in_seconds: 0,
     window_started: false,
     is_pro: false,
+    plan: 'free',          // v47: free | pro | vip
+    plan_until: null,
+    unlimited: false,      // v47: VIP / admin / "cheksiz"
+    ad_free: false,
     total_tokens: 0,
     spent_units: 0
   };
@@ -85,6 +89,10 @@
     return '<div class="ss-meter-foot ss-cross"><span>Tez AI: <b>' + fmt(toPages(t, 'fast')) + '</b> varaq</span><span>Chuqur AI: <b>' + fmt(toPages(t, 'deep')) + '</b> varaq</span></div>';
   }
   function metersHTML() {
+    if (_state.unlimited) {
+      return '<div class="ss-meter-wrap"><div class="ss-meter"><div class="ss-meter-row"><span class="ss-meter-name">' + (_state.plan === 'vip' ? 'VIP' : 'Cheksiz') +
+        '</span><b>∞</b></div><div class="ss-meter-track"><div class="ss-meter-fill" data-pct="100" style="width:0"></div></div><div class="ss-meter-foot"><span>Varaq cheklovsiz · reklamasiz</span></div></div></div>';
+    }
     const paid = _state.paid_credits | 0;
     const m = MODES[curMode()];
     const resetTxt = _state.window_started ? 'yangilanishiga: ' + formatReset(_state.next_reset_in_seconds) : "24 soat birinchi AI so'rovdan boshlanadi";
@@ -139,6 +147,12 @@
   let _lastPillUnits = null;
   function renderPill() {
     const b = ensurePill(); if (!b) return;
+    if (_state.unlimited) {
+      b.querySelector('.q-n').textContent = '∞';
+      b.querySelector('.q-bar u').style.width = '100%';
+      b.classList.remove('low', 'empty'); b.classList.add('paid');
+      return;
+    }
     const paid = _state.paid_credits | 0, free = _state.free_credits | 0;
     const capU = Math.max(1, FREE_UNITS + (paid > 0 ? Math.max(PACK_UNITS, paid) : 0));
     const leftU = free + paid, m = curMode();
@@ -159,14 +173,14 @@
     const bar = document.getElementById('tokenStatusBar');
     if (bar) bar.style.display = isLoggedIn() ? 'flex' : 'none';
     if (badge) {
-      const pro = _state.is_pro || (_state.paid_credits | 0) > 0;
-      badge.textContent = pro ? 'PRO' : 'FREE';
+      const pro = !!_state.is_pro;
+      badge.textContent = _state.plan === 'vip' ? 'VIP' : (_state.unlimited ? '∞' : (pro ? 'PRO' : 'FREE'));
       badge.className = 'credit-badge ' + (pro ? 'pro' : 'free');
     }
     if (tokens && typeof _state.total_tokens === 'number') tokens.textContent = Number(_state.total_tokens).toLocaleString();
     if (bar) {
-      bar.classList.toggle('credits-low', total <= FREE_UNITS * 0.2);
-      bar.classList.toggle('credits-empty', total < MODES[m].chat_units);
+      bar.classList.toggle('credits-low', !_state.unlimited && total <= FREE_UNITS * 0.2);
+      bar.classList.toggle('credits-empty', !_state.unlimited && total < MODES[m].chat_units);
     }
     try {
       const strip = document.getElementById('aiBalanceStrip');
@@ -191,7 +205,14 @@
     if (typeof data.next_reset_in_seconds === 'number') _state.next_reset_in_seconds = data.next_reset_in_seconds;
     if (typeof data.window_started === 'boolean') _state.window_started = data.window_started;
     else _state.window_started = (_state.next_reset_in_seconds | 0) > 0;
-    _state.is_pro = typeof data.is_pro === 'boolean' ? data.is_pro : (_state.paid_credits | 0) > 0;
+    _state.is_pro = typeof data.is_pro === 'boolean' ? data.is_pro : false;
+    _state.plan = data.plan || 'free';
+    _state.plan_until = data.plan_until || null;
+    _state.unlimited = !!data.unlimited;
+    _state.ad_free = typeof data.ad_free === 'boolean' ? data.ad_free : (_state.unlimited || _state.is_pro);
+    if (data.pro_price_usd) _state.pro_price = Number(data.pro_price_usd);
+    if (data.pro_days) _state.pro_days = Number(data.pro_days);
+    try { document.dispatchEvent(new CustomEvent('ss:usage', { detail: getState() })); } catch (_) {}
     if (typeof data.total_tokens === 'number') _state.total_tokens = data.total_tokens;
     if (typeof data.user_total_tokens === 'number') _state.total_tokens = data.user_total_tokens;
     if (typeof data.spent_24h === 'number') _state.spent_units = data.spent_24h;
@@ -221,6 +242,7 @@
 
   function guardSend() {
     if (!isLoggedIn()) return true;
+    if (_state.unlimited) return true;       // v47: VIP / admin / cheksiz — hech qachon to'silmaydi
     if (totalUnits() >= MODES[curMode()].chat_units) return true;
     if ((_state.next_reset_in_seconds | 0) <= 0) return true;
     showLimitModal();
@@ -257,7 +279,9 @@
   }
 
   let _checkoutBusy = false;
-  async function startCheckout() {
+  function tgWebApp() { try { const w = window.Telegram && window.Telegram.WebApp; return w && w.initData ? w : null; } catch (_) { return null; } }
+  async function startCheckout(product) {
+    product = product === 'pro' ? 'pro' : 'pack';
     if (_checkoutBusy) return;
     if (!isLoggedIn()) {
       try { showToast("To'lov uchun avval tizimga kiring.", 'error'); } catch (_) {}
@@ -266,19 +290,21 @@
     _checkoutBusy = true;
 
     let win = null;
-    try { win = window.open('about:blank', '_blank'); } catch (_) { win = null; }
+    const tgw = tgWebApp();
+    if (!tgw) { try { win = window.open('about:blank', '_blank'); } catch (_) { win = null; } }   // Telegram ichida popup ochilmaydi — openLink ishlatiladi
     try {
       const email = typeof currentUserEmail !== 'undefined' ? currentUserEmail : '';
       try { showToast("To'lov oynasi ochilmoqda…"); } catch (_) {}
       const res = await fetch('/api/payment/create-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: supabaseToken, email: email, return_url: window.location.origin })
+        body: JSON.stringify({ token: supabaseToken, email: email, return_url: window.location.origin, product: product })
       });
       let data = {};
       try { data = await res.json(); } catch (_) { data = { error: 'Server javobi noto\'g\'ri (HTTP ' + res.status + ')' }; }
       if (data.checkout_url) {
-        if (win && !win.closed) win.location.href = data.checkout_url;
+        if (tgw && typeof tgw.openLink === 'function') tgw.openLink(data.checkout_url);
+        else if (win && !win.closed) win.location.href = data.checkout_url;
         else window.location.href = data.checkout_url;
       } else {
         if (win && !win.closed) win.close();
@@ -302,13 +328,17 @@
       const q = params.toString();
       history.replaceState(null, '', window.location.pathname + (q ? '?' + q : '') + window.location.hash);
     } catch (_) {}
-    const before = _state.paid_credits | 0;
-    try { showToast("To'lov qabul qilindi. Varaqlar qo'shilmoqda…"); } catch (_) {}
+    const before = _state.paid_credits | 0, beforePro = !!_state.is_pro;
+    try { showToast("To'lov qabul qilindi. Hisob yangilanmoqda…"); } catch (_) {}
     for (let i = 0; i < 10; i++) {
       await new Promise(function (r) { setTimeout(r, i === 0 ? 1500 : 3000); });
       try {
         if (typeof loadUserStats === 'function') await loadUserStats();
       } catch (_) {}
+      if (_state.is_pro && !beforePro) {
+        try { showToast('👑 Pro faollashtirildi — reklama o\'chdi!'); } catch (_) {}
+        return;
+      }
       if ((_state.paid_credits | 0) > before) {
         try { showToast('✅ +' + ((_state.paid_credits | 0) - before) + ' varaq qo\'shildi!'); } catch (_) {}
         return;
