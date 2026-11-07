@@ -36,9 +36,9 @@ def _env_num(name, default, cast):
         return default
 
 UNIT = 20                       # 1 Tez-varaq = 20 birlik (4 va 5 ga ham aniq bo'linadi)
-DEEP_MULT = 3                   # 1 Chuqur-varaq = 3 Tez-varaq
-FREE_DAILY_PAGES = _env_num("FREE_DAILY_PAGES", 15, int)     # Tez-varaq hisobida (Chuqur: /3 = 5)
-PAGES_PER_PACK = _env_num("PAGES_PER_PACK", 150, int)        # Tez-varaq hisobida (Chuqur: /3 = 50)
+DEEP_MULT = 2                   # 1 Chuqur-varaq = 2 Tez-varaq (100 Tez = 50 Chuqur)
+FREE_DAILY_PAGES = _env_num("FREE_DAILY_PAGES", 10, int)     # Tez-varaq hisobida (Chuqur: /2 = 5)
+PAGES_PER_PACK = _env_num("PAGES_PER_PACK", 100, int)        # Tez-varaq hisobida (Chuqur: /2 = 50)
 CHECKOUT_PRICE_USD = _env_num("PACK_PRICE_USD", 1.00, float)
 FREE_DAILY_UNITS = FREE_DAILY_PAGES * UNIT
 PACK_UNITS = PAGES_PER_PACK * UNIT
@@ -417,6 +417,17 @@ def daily_units_for(user: Optional[dict]) -> int:
         return max(free_daily_units(), pro_daily_units())
     return free_daily_units()
 
+def free_suspended(user: Optional[dict]) -> bool:
+    """Pullik balans kunlik bepul limitdan (masalan 10 varaq) KO'P yoki teng bo'lsa — kunlik bepul limit ishlamaydi.
+    Pullik balans shu chegaradan pastga tushganda avtomatik qayta tiklanadi."""
+    user = user or {}
+    try:
+        daily = daily_units_for(user)
+        paid = int(user.get("paid_credits") or 0)
+    except (TypeError, ValueError):
+        return False
+    return daily > 0 and paid >= daily
+
 def plans_public() -> List[Dict[str, Any]]:
     fd, pk = rt("free_daily_pages"), rt("pack_pages")
     return [
@@ -455,7 +466,12 @@ def apply_24h_reset(user: dict, free_daily: int = None) -> dict:
         free_daily = daily_units_for(user)
     now = _now()
     last = _parse_ts(user.get("last_reset_time"))
-    if last is None or (now - last) >= timedelta(hours=24):
+    if free_suspended(user):
+        # Pullik balans yetarli: yangi bepul varaq BERILMAYDI (qolgan eski bepul varaqlar avval ishlatiladi).
+        user["free_credits"] = min(user["free_credits"], free_daily)
+        if user["free_credits"] <= 0 and (last is None or (now - last) < timedelta(hours=24)):
+            user["last_reset_time"] = (now - timedelta(hours=24)).isoformat()   # pullik balans tushishi bilan bepul limit DARHOL tiklansin
+    elif last is None or (now - last) >= timedelta(hours=24):
         user["free_credits"] = free_daily
         user["last_reset_time"] = now.isoformat()
     else:
@@ -466,6 +482,8 @@ def apply_24h_reset(user: dict, free_daily: int = None) -> dict:
 def window_started(user: dict, free_daily: int = None) -> bool:
     """24 soatlik oyna faqat birinchi sarfdan keyin boshlanadi."""
     u = normalize_user_row(user, free_daily)
+    if free_suspended(u):
+        return False
     if free_daily is None:
         free_daily = daily_units_for(u)
     return int(u.get("free_credits") or 0) < int(free_daily)
@@ -518,7 +536,8 @@ def charge_for_ai_turn(user: dict, pages_from_actions: int, searches: int = 0, m
     user = apply_24h_reset(user)
     if is_unlimited(user):                      # v47: VIP / admin / "cheksiz" — hech narsa yechilmaydi
         return user, 0, "unlimited"
-    if not window_started(user):
+    was_suspended = free_suspended(user)
+    if not window_started(user) and not was_suspended:
         user["last_reset_time"] = _now().isoformat()
     pages_from_actions = max(0, int(pages_from_actions or 0))
     searches = max(0, int(searches or 0))
@@ -534,6 +553,8 @@ def charge_for_ai_turn(user: dict, pages_from_actions: int, searches: int = 0, m
         user = deduct_credits(user, take)
     else:
         reason = "no_credits"
+    if was_suspended and int(user.get("free_credits") or 0) <= 0:
+        user["last_reset_time"] = (_now() - timedelta(hours=24)).isoformat()   # pullik balans tushsa, bepul limit darhol qaytadi
     return user, int(take), reason
 
 def _fmt_pages(units: int, page_units: int) -> float:
@@ -578,6 +599,7 @@ def usage_payload(user: dict) -> dict:
         "plan_until": user.get("plan_until") if plan == "pro" else None,
         "unlimited": unl,
         "ad_free": is_ad_free(user),
+        "free_suspended": free_suspended(user),          # pullik balans yetarli — kunlik bepul limit to'xtatilgan
         "free_daily": fdu // UNIT,
         "pack_pages": pack_pages(),
         "pack_price_usd": CHECKOUT_PRICE_USD,

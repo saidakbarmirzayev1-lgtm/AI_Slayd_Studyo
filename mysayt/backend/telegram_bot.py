@@ -500,7 +500,7 @@ async def _balance_info(user: dict) -> Optional[dict]:
         "daily": fast.get("free_daily_pages", 0),
         "wait": _fmt_wait(p.get("next_reset_in_seconds")) if p.get("window_started") else "",
         "linked": email != _tg_email(int(user["id"])), "email": email,
-        "plan": p.get("plan", "free"), "until": until, "unlimited": bool(p.get("unlimited")), "ad_free": bool(p.get("ad_free")),
+        "suspended": bool(p.get("free_suspended")), "plan": p.get("plan", "free"), "until": until, "unlimited": bool(p.get("unlimited")), "ad_free": bool(p.get("ad_free")),
         "pro_price": p.get("pro_price_usd"), "pro_days": p.get("pro_days"), "pro_daily": (p.get("plans") or [{}, {}])[1].get("pages") if len(p.get("plans") or []) > 1 else None,
     }
 
@@ -521,9 +521,9 @@ def _balance_block(i: dict) -> str:
         return "♾ Varaqlar: <b>cheksiz</b>"
     daily = float(i.get("daily") or 0)
     lines = [f"💎 Varaqlar: <b>{_fmt_pages(float(i['free']) + float(i['paid']))}</b>"]
-    if daily:
+    if daily and not i.get("suspended"):
         lines.append(f"🎁 Shundan bugungi bepul: <b>{_fmt_pages(i['free'])}</b>/{_fmt_pages(daily)}")
-    if i.get("wait"):
+    if i.get("wait") and not i.get("suspended"):
         lines.append(f"🔄 Bepul varaqlar <b>{i['wait']}</b> dan keyin yangilanadi")
     return "\n".join(lines)
 
@@ -1245,6 +1245,40 @@ async def _fetch_images(deck: dict, have: Dict[str, bytes], enabled: bool) -> Di
     return out
 
 
+_NO_IMG_RE = re.compile(r"rasmsiz|rasm\s*(?:kerak\s*emas|qo'?yma|siz)|without\s+images?|no\s+images?|без\s+(?:картин|изображ|фото)", re.I)
+
+
+async def _ensure_image_queries(deck: dict, topic: str) -> int:
+    """Titul va ba'zi bullets slaydlarda rasm so'rovi yo'q bo'lsa (Chuqur AI'da tez-tez) — kichik tez AI so'rovi bilan to'ldiradi. Sarflangan token qaytadi."""
+    slides = deck.get("slides") or []
+    cand = [i for i, sl in enumerate(slides) if sl.get("layout") in ("title", "bullets")]
+    if not cand or any((slides[i].get("image") or "").strip() for i in cand):
+        return 0
+    pick = [cand[0]] + [i for i in cand[1:] if (i - cand[0]) % 2 == 1][: max(1, int(len(cand) * 0.4))]
+    listing = "\n".join(f"{i}: {str(slides[i].get('title') or deck.get('title') or '')[:90]}" for i in pick)
+    prompt = (f"Topic: {topic[:200]}\nFor each slide below give a short ENGLISH photo search query (2-4 words, a concrete photographable subject).\n"
+              f"Slides:\n{listing}\n\nReturn ONLY JSON: {{\"queries\": {{\"<slide number>\": \"query\"}}}}")
+    try:
+        data, tk = await _ai_json("You write image search queries. Return only valid JSON (json).", prompt, "fast")
+    except Exception as e:
+        _warn("imgq", f"rasm so'rovlari olinmadi: {type(e).__name__}")
+        slides[cand[0]]["image"] = decks.clean(topic, 60)                 # kamida titul slaydga mavzu bo'yicha rasm
+        return 0
+    qs = (data or {}).get("queries") if isinstance(data, dict) else None
+    if isinstance(qs, dict):
+        for k, v in qs.items():
+            try:
+                i = int(k)
+            except (TypeError, ValueError):
+                continue
+            q = decks.clean(v, 60)
+            if i in pick and q:
+                slides[i]["image"] = q
+    if not any((slides[i].get("image") or "").strip() for i in cand):      # AI ham bermasa — mavzu o'zi bilan titul slayd
+        slides[cand[0]]["image"] = decks.clean(topic, 60)
+    return int(tk or 0)
+
+
 def _img_index(deck: dict, imgs: Dict[str, bytes]) -> Dict[int, bytes]:
     return {i: imgs[s["image"]] for i, s in enumerate(deck["slides"]) if s.get("image") and s["image"] in imgs}
 
@@ -1345,6 +1379,8 @@ async def _run_generate(chat_id: int, user: dict, topic: str, n: int) -> None:
             deck, tokens, tries = None, 0, 0
             data: Optional[dict] = None
             prompt = f"User request:\n{topic}\n\nNumber of slides N = {n}"
+            if mode == "deep" and not _NO_IMG_RE.search(topic):
+                prompt += "\nIMPORTANT: set \"images\": true and fill the English \"image\" query for the title slide and for about 40% of the bullets slides."
             while tries < 2 and deck is None:
                 tries += 1
                 data, tk = await _ai_json(GEN_SYSTEM, prompt if tries == 1 else prompt + "\n\nReturn ONLY the JSON object, strictly following the schema.", mode)
@@ -1353,7 +1389,9 @@ async def _run_generate(chat_id: int, user: dict, topic: str, n: int) -> None:
             if deck is None:
                 await _edit(chat_id, msg_id, "⚠️ AI to'g'ri javob bermadi. Hech narsa yechilmadi — mavzuni qayta yuboring.")
                 return
-            imgs_on = (data or {}).get("images", True) is not False
+            imgs_on = (data or {}).get("images", True) is not False or not _NO_IMG_RE.search(topic)   # AI «rasm kerak emas» desa-yu, foydalanuvchi so'ramagan bo'lsa — baribir rasm
+            if imgs_on:
+                tokens += await _ensure_image_queries(deck, topic)           # Chuqur AI ko'pincha rasm so'rovini yozmaydi — shuni to'ldiramiz
             await _edit(chat_id, msg_id, _steps(2, f"\n\n«{esc(deck['title'])}» — {len(deck['slides'])} ta slayd"))
             await tg("sendChatAction", chat_id=chat_id, action="upload_photo")
             imgs = await _fetch_images(deck, {}, imgs_on)

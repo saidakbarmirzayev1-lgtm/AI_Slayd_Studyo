@@ -11,3 +11,6 @@
 - Sayt (brauzer) tomonidagi Pro/admin panel o'zgarmadi.
 - Rang/tahrirdan keyin qayta yuklashda slayd rasmi almashib ketmaydi (tg_decks.find_image tanlangan rasm manzilini eslab qoladi).
 - **To'lov:** webhook manzili `/api/payment/lemon-webhook` (muqobil: `/webhook/lemonsqueezy` ham qabul qilinadi). Lemon kalitlaridagi `\n`/bo'shliq/tirnoq/«Bearer » avtomatik tozalanadi.
+- Chuqur AI: rasm so'rovlari yozilmasa, bot o'zi to'ldiradi (titul + ~40% bullets slaydlar); «rasmsiz» deyilmasa rasm qo'yiladi.
+- **Limitlar:** bepul kunlik 10 varaq, paket 100 varaq. Chuqur varaq = 2 Tez varaq (100 Tez = 50 Chuqur, bepul 10 = 5 Chuqur).
+- **Bepul limit qoidasi:** pullik balans 10 varaqdan KO'P yoki teng bo'lsa — kunlik bepul limit to'xtaydi (yangi bepul varaq berilmaydi). Pullik balans 10 dan pastga tushganda bepul limit darhol qaytadi. Yangi paket mavjud balansga to'liq qo'shiladi. (`backend/monitoring.py`: `free_suspended`, `apply_24h_reset`, `charge_for_ai_turn`)
