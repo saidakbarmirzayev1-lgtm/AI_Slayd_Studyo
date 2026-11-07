@@ -14,3 +14,4 @@
 - Chuqur AI: rasm so'rovlari yozilmasa, bot o'zi to'ldiradi (titul + ~40% bullets slaydlar); «rasmsiz» deyilmasa rasm qo'yiladi.
 - **Limitlar:** bepul kunlik 10 varaq, paket 100 varaq. Chuqur varaq = 2 Tez varaq (100 Tez = 50 Chuqur, bepul 10 = 5 Chuqur).
 - **Bepul limit qoidasi:** pullik balans 10 varaqdan KO'P yoki teng bo'lsa — kunlik bepul limit to'xtaydi (yangi bepul varaq berilmaydi). Pullik balans 10 dan pastga tushganda bepul limit darhol qaytadi. Yangi paket mavjud balansga to'liq qo'shiladi. (`backend/monitoring.py`: `free_suspended`, `apply_24h_reset`, `charge_for_ai_turn`)
+- Sayt, Chuqur AI: deepseek-reasoner tool chaqira olmasligi sabab rasm qidirilmasdi — endi server rasmlarni oldindan topib, tayyor URL ro'yxatini beradi (main.py: _deep_presearch).

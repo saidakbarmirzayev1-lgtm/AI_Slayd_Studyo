@@ -203,6 +203,43 @@ except Exception as _is_err:
 
 MAX_TOOL_ROUNDS = 4
 MAX_SEARCHES_PER_TURN = 10
+
+import re as _re
+_NO_IMG_RE = _re.compile(r"rasmsiz|rasm\s*(?:kerak\s*emas|qo'?yma|siz)|without\s+images?|no\s+images?|без\s+(?:картин|изображ|фото)", _re.I)
+_IMG_CTX_RE = _re.compile(r"slayd|slide|taqdimot|rasm|image|photo|foto|fon\b|banner|презент|слайд|изображ|картин", _re.I)
+
+
+async def _deep_presearch(client: Any, context: str, max_q: int = 3) -> str:
+    """Chuqur AI (deepseek-reasoner) tool chaqira olmaydi — shuning uchun rasmlarni OLDINDAN topib, tayyor URL ro'yxatini beramiz.
+    Kichik tez model inglizcha so'rovlarni yozadi, qidiruv parallel ishlaydi. Xatoda bo'sh matn (oqim buzilmaydi)."""
+    if not _search_images_sync:
+        return ""
+    try:
+        r = await asyncio.wait_for(client.chat.completions.create(
+            model="deepseek-chat", temperature=0, max_tokens=160, response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": "You write photo search queries for slides. Return only JSON (json): {\"queries\": [\"2-4 word ENGLISH query\", ...]}. "
+                                                    f"At most {max_q} queries, each a concrete photographable subject. If the request needs no pictures return an empty list."},
+                      {"role": "user", "content": context[:1500]}]), timeout=20)
+        qs = json.loads(r.choices[0].message.content or "{}").get("queries") or []
+    except Exception as e:
+        print(f"[DEEP-IMG] so'rov yozilmadi: {type(e).__name__}")
+        return ""
+    qs = [str(q).strip()[:60] for q in qs if str(q).strip()][:max_q]
+    if not qs:
+        return ""
+    res = await asyncio.gather(*[asyncio.wait_for(asyncio.to_thread(_search_images_sync, q, "photo", 8), timeout=25) for q in qs], return_exceptions=True)
+    blocks = []
+    for q, f in zip(qs, res):
+        if isinstance(f, list):
+            urls = [str(x.get("url")) for x in f[:4] if isinstance(x, dict) and x.get("url")]
+            if urls:
+                blocks.append(f'"{q}":\n' + "\n".join("  - " + u for u in urls))
+    if not blocks:
+        return ""
+    print(f"[DEEP-IMG] {len(blocks)} ta so'rov uchun rasm topildi")
+    return ("\n\n[TAYYOR RASMLAR — server allaqachon qidirib topdi]\n"
+            "Rasm kerak bo'lsa FAQAT shu URL'lardan birini ishlating: {\"type\":\"image\",\"src\":URL,...}. URL o'ylab topmang, tool chaqirmang, "
+            "qidirishga va'da bermang — rasmlar tayyor.\n" + "\n".join(blocks))
 SEARCH_TOOLS = [{
     "type": "function",
     "function": {
@@ -2319,6 +2356,19 @@ async def ws_chat(websocket: WebSocket):
                 )
                 async with GEMINI_SEMAPHORE:
                     tools_on = bool(_search_images_sync) and model != "deepseek-reasoner" and mode != "plan"
+                    if model == "deepseek-reasoner" and _search_images_sync and mode != "plan" and not _NO_IMG_RE.search(user_content or ""):
+                        try:
+                            _ctx, _want = user_content or "", bool(_IMG_CTX_RE.search(user_content or ""))
+                            if mode == "generate" and isinstance(plan_slides, list) and plan_index is not None and 0 <= int(plan_index) < len(plan_slides):      # slayd-slayd yaratish: faqat has_image slaydlar
+                                _cur = plan_slides[int(plan_index)] or {}
+                                _want = bool(_cur.get("has_image"))
+                                _ctx = f"Deck topic: {user_content}\nSlide: {_cur.get('title', '')} — {_cur.get('summary', '')}"
+                            if _want:
+                                _extra = await _deep_presearch(client, _ctx, 1 if mode == "generate" else 3)
+                                if _extra:
+                                    messages[-1] = {"role": "user", "content": (messages[-1].get("content") or "") + _extra}
+                        except Exception as _pe:
+                            print(f"[DEEP-IMG] {type(_pe).__name__}: {str(_pe)[:80]}")
                     msgs = messages
                     n_searches = 0
                     agg_in = agg_out = agg_tot = 0
