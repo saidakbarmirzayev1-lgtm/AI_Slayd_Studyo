@@ -774,7 +774,7 @@ _RL_RULES = (            # (path prefix, limit per 60s per IP)
     ("/api/proxy-video", 60),
     ("/api/", 240),
 )
-_RL_EXEMPT = ("/api/payment/lemon-webhook",)
+_RL_EXEMPT = ("/api/payment/lemon-webhook", "/webhook/lemonsqueezy")
 
 def _rate_limited(ip: str, path: str) -> bool:
     if path.startswith(_RL_EXEMPT):
@@ -1065,13 +1065,24 @@ def billing_plans():
         "note": "Lemon Squeezy komissiyasi: 5% + $0.50 — narxni shunga qarab belgilang",
     }
 
+def _clean_env(name: str, bearer: bool = False) -> str:
+    """Render'ga kalit nusxalanganda qolib ketadigan \\n, bo'shliq, tirnoq va «Bearer » ni tozalaydi
+    (aks holda «Invalid header value» xatosi chiqadi)."""
+    v = os.environ.get(name) or ""
+    if isinstance(v, bytes):
+        v = v.decode("utf-8", "ignore")
+    v = v.strip().strip("\"'").strip()
+    if bearer and v.lower().startswith("bearer "):
+        v = v[7:]
+    return _re.sub(r"[\s\x00-\x1f\x7f\u200b\ufeff]+", "", v)
+
 def _ls_env():
     return {
-        "api_key": (os.environ.get("LEMON_SQUEEZY_API_KEY") or "").strip(),
-        "store_id": (os.environ.get("LEMON_SQUEEZY_STORE_ID") or "").strip(),
-        "variant_id": (os.environ.get("LEMON_SQUEEZY_VARIANT_ID") or "").strip(),
-        "pro_variant_id": (os.environ.get("LEMON_SQUEEZY_PRO_VARIANT_ID") or "").strip(),
-        "secret": (os.environ.get("LEMON_SQUEEZY_WEBHOOK_SECRET") or "").strip(),
+        "api_key": _clean_env("LEMON_SQUEEZY_API_KEY", bearer=True),
+        "store_id": _clean_env("LEMON_SQUEEZY_STORE_ID"),
+        "variant_id": _clean_env("LEMON_SQUEEZY_VARIANT_ID"),
+        "pro_variant_id": _clean_env("LEMON_SQUEEZY_PRO_VARIANT_ID"),
+        "secret": _clean_env("LEMON_SQUEEZY_WEBHOOK_SECRET"),
         "test_mode": (os.environ.get("LEMON_SQUEEZY_TEST_MODE") or "").strip() in ("1", "true", "yes"),
         "base_url": (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/"),
     }
@@ -1252,6 +1263,7 @@ def _find_user_by_email(email: str) -> str:
     return ""
 
 @app.post("/api/payment/lemon-webhook")
+@app.post("/webhook/lemonsqueezy")          # muqobil manzil: dashboard'da shu yozilgan bo'lsa ham ishlaydi
 async def lemon_webhook(request: Request):
     """Lemon Squeezy: order_created(paid) → paid_credits += 200; order_refunded → qaytarib olinadi."""
     import hmac, hashlib

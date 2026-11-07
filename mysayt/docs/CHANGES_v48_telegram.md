@@ -10,3 +10,4 @@
 - Fayllar: `backend/telegram_bot.py`, `backend/admin_core.py` (`resolve_target`, `user_brief`), `tests/test_v47.py`.
 - Sayt (brauzer) tomonidagi Pro/admin panel o'zgarmadi.
 - Rang/tahrirdan keyin qayta yuklashda slayd rasmi almashib ketmaydi (tg_decks.find_image tanlangan rasm manzilini eslab qoladi).
+- **To'lov:** webhook manzili `/api/payment/lemon-webhook` (muqobil: `/webhook/lemonsqueezy` ham qabul qilinadi). Lemon kalitlaridagi `\n`/bo'shliq/tirnoq/«Bearer » avtomatik tozalanadi.
