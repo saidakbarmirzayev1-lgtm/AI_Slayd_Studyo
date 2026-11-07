@@ -9,3 +9,4 @@
 - **Sodda matnlar:** /start, yordam, balans, «varaq tugadi» qisqartirildi; reklama faqat sarlavha + matn (Pro eslatmasiz).
 - Fayllar: `backend/telegram_bot.py`, `backend/admin_core.py` (`resolve_target`, `user_brief`), `tests/test_v47.py`.
 - Sayt (brauzer) tomonidagi Pro/admin panel o'zgarmadi.
+- Rang/tahrirdan keyin qayta yuklashda slayd rasmi almashib ketmaydi (tg_decks.find_image tanlangan rasm manzilini eslab qoladi).

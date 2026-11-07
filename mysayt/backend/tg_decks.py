@@ -9,6 +9,7 @@ Matn o'lchami DejaVu Sans (eng keng shrift) bilan o'lchanadi — boshqa shriftla
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import base64
 import html as _html
 import io
@@ -842,8 +843,18 @@ def download_image(url: str, timeout: float = 8.0) -> Optional[bytes]:
     return None
 
 
+_IMG_URL_CACHE: "OrderedDict[str, str]" = OrderedDict()   # query -> tanlangan rasm manzili (faqat qisqa matn, fayl emas)
+
+
 def find_image(query: str) -> Optional[bytes]:
-    """Sinxron: qidiruv + yuklash (birinchi yaroqli rasm)."""
+    """Sinxron: qidiruv + yuklash. Bir mavzu uchun BIR XIL rasm: oldin tanlangan manzil eslab qolinadi,
+    shuning uchun rang o'zgartirib qayta yuklaganda rasm almashib ketmaydi."""
+    key = (query or "").strip().lower()
+    cached = _IMG_URL_CACHE.get(key)
+    if cached:
+        data = download_image(cached)
+        if data and cover_jpeg(data, 100, 100, scale=1.0) is not None:
+            return data
     try:
         from backend.image_search import search_images
         res = search_images(query, "photo", 8) or []
@@ -857,6 +868,9 @@ def find_image(query: str) -> Optional[bytes]:
         tried += 1
         data = download_image(u)
         if data and cover_jpeg(data, 100, 100, scale=1.0) is not None:
+            _IMG_URL_CACHE[key] = u
+            while len(_IMG_URL_CACHE) > 800:
+                _IMG_URL_CACHE.popitem(last=False)
             return data
         if tried >= 4:
             break
