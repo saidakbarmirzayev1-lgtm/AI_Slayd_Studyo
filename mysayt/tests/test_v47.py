@@ -351,65 +351,81 @@ def test_bot_admin_command(env, tgrec):
     run = lambda m: asyncio.run(bot.handle_update(m))
     run(msg(111, "admin"))
     sent = tgrec.calls[-1][1]
-    assert "Admin panel" in sent["text"] and "/_a/" in json.dumps(sent["reply_markup"])
+    assert "/give" in sent["text"] and "/unlimited" in sent["text"]
     tgrec.calls.clear()
-    run(msg(999, "Admin"))                      # oddiy foydalanuvchi: panel haqida hech narsa oshkor bo'lmaydi
-    t = tgrec.calls[-1][1]["text"]
-    assert "panel" not in t.lower() and "admin" not in t.lower() and "mavzu" in t.lower()
+    run(msg(999, "Admin"))                      # oddiy foydalanuvchi: hech narsa oshkor bo'lmaydi
+    assert tgrec.calls[-1][1]["text"] == "Bunday buyruq mavjud emas."
     tgrec.calls.clear()
-    run(msg(999, "/admin"))
-    assert "admin" not in tgrec.calls[-1][1]["text"].lower().replace("buyruqlar", "")
-    sb.tables["tg_links"].clear()
-    tgrec.calls.clear()
-    run(msg(111, "admin"))
-    assert "ulanmagan" in tgrec.calls[-1][1]["text"]
-    assert "/_a/" not in json.dumps(tgrec.calls[-1][1])                                 # ulanmaguncha panel havolasi berilmaydi
+    run(msg(999, "/give 111 5"))
+    assert tgrec.calls[-1][1]["text"] == "Bunday buyruq mavjud emas."
+
+
+def test_bot_admin_manages_balance(env, tgrec):
+    c, sb = env
+    bot._deps["supabase_getter"] = lambda: sb
+    run = lambda m: asyncio.run(bot.handle_update(m))
+    sb.tables["tg_links"].append({"tg_id": 555, "user_id": "u-free", "email": "free@example.com"})
+    run(msg(111, "/give 555 40"))
+    assert "40" in tgrec.calls[-1][1]["text"]
+    assert mon.usage_payload(main.get_or_create_user_usage("u-free", "free@example.com"))["modes"]["fast"]["paid_pages"] >= 40
+    run(msg(111, "/take 555 15"))
+    run(msg(111, "/unlimited 555"))
+    assert main.get_or_create_user_usage("u-free", "free@example.com")["unlimited"] is True
+    run(msg(111, "/unlimited 555 off"))
+    run(msg(111, "/reset 555"))
+    u = mon.usage_payload(main.get_or_create_user_usage("u-free", "free@example.com"))
+    assert not u["unlimited"] and u["modes"]["fast"]["paid_pages"] == 0
+    run(msg(111, "/give 424242 5"))                                   # noma'lum foydalanuvchi — xato matni, crash yo'q
+    assert "Topilmadi" in tgrec.calls[-1][1]["text"]
+
+
+def test_bot_requires_google_before_slides(env, tgrec):
+    c, sb = env
+    bot._deps["supabase_getter"] = lambda: sb
+    bot._uids[888] = ("u-tg", "tg888@t.me")                              # Google ulanmagan oddiy foydalanuvchi
+    asyncio.run(bot.handle_update(msg(888, "Sun'iy intellekt")))
+    out = tgrec.calls[-1][1]
+    assert "Google" in out["text"] and "linkinfo" in json.dumps(out["reply_markup"])
+    assert not bot._state(1).get("busy")
 
 
 def test_bot_buy_flows(env, tgrec, monkeypatch):
     c, sb = env
-    asyncio.run(bot._do_buy(5, {"id": 777, "first_name": "A"}, "pro")) if False else None
     calls = []
 
     async def fake_checkout(uid, email, base, product):
         calls.append(product)
-        return {"url": "https://pay.test/z", "days": 30, "pages": 150, "price": 5.0}
+        return {"url": "https://pay.test/z", "pages": 150, "price": 5.0}
     bot._deps["checkout"] = fake_checkout
     bot._deps["supabase_getter"] = lambda: sb
     bot._uids[777] = ("u-free", "free@example.com")
-    asyncio.run(bot._do_buy(1, {"id": 777}, "pro"))
+    asyncio.run(bot._do_buy(1, {"id": 777}, "pack"))
     out = tgrec.calls[-1][1]
-    assert calls == ["pro"] and "To'lovga o'tish" in json.dumps(out["reply_markup"], ensure_ascii=False) and "Pro" in out["text"]
+    assert calls == ["pack"] and "To'lovga o'tish" in json.dumps(out["reply_markup"], ensure_ascii=False) and "150" in out["text"]
 
     async def bad_checkout(*a):
-        return {"error": "Pro to'lovi hali sozlanmagan", "hint": "LEMON_SQUEEZY_PRO_VARIANT_ID"}
+        return {"error": "To'lov hali sozlanmagan", "hint": "LEMON_SQUEEZY_VARIANT_ID"}
     bot._deps["checkout"] = bad_checkout
     tgrec.calls.clear()
-    asyncio.run(bot._do_buy(1, {"id": 777}, "pro"))                                   # oddiy foydalanuvchi: texnik sabab ko'rinmaydi
+    asyncio.run(bot._do_buy(1, {"id": 777}, "pack"))                                  # oddiy foydalanuvchi: texnik sabab ko'rinmaydi
     assert "VARIANT" not in tgrec.calls[-1][1]["text"]
     bot._uids[111] = ("u-boss", "boss@example.com")
     tgrec.calls.clear()
-    asyncio.run(bot._do_buy(1, {"id": 111}, "pro"))                                   # admin: sabab ko'rinadi
+    asyncio.run(bot._do_buy(1, {"id": 111}, "pack"))                                  # admin: sabab ko'rinadi
     assert "VARIANT" in tgrec.calls[-1][1]["text"]
 
 
-def test_bot_pro_card_and_balance_unlimited(env, tgrec):
+def test_bot_balance_and_no_pro_buttons(env, tgrec):
     c, sb = env
     bot._deps["supabase_getter"] = lambda: sb
     bot._uids[111] = ("u-boss", "boss@example.com")
-    bot._uids[778] = ("u-pro", "pro@example.com")
     bot._uids[779] = ("u-free", "free@example.com")
-    asyncio.run(bot._show_pro(1, {"id": 111}))
-    assert "VIP" in tgrec.calls[-1][1]["text"] or "Pro / VIP" in tgrec.calls[-1][1]["text"]
     asyncio.run(bot._show_balance(1, {"id": 111}))
-    assert "∞" in tgrec.calls[-1][1]["text"]
-    asyncio.run(bot._show_balance(1, {"id": 778}))
-    assert "Pro" in tgrec.calls[-1][1]["text"] and "gacha" in tgrec.calls[-1][1]["text"]
+    assert "cheksiz" in tgrec.calls[-1][1]["text"]
     asyncio.run(bot._show_balance(1, {"id": 779}))
-    t = tgrec.calls[-1][1]["text"]
-    assert "Bepul reja" in t and "▰" in t
-    asyncio.run(bot._show_pro(1, {"id": 779}))
-    assert "Reklamasiz" in tgrec.calls[-1][1]["text"] and "buypro" in json.dumps(tgrec.calls[-1][1]["reply_markup"])
+    out = tgrec.calls[-1][1]
+    assert "Varaqlar" in out["text"] and "Pro" not in out["text"] and "Pro" not in json.dumps(out["reply_markup"], ensure_ascii=False)
+    assert bot.kb_reply()["keyboard"] and "Pro" not in json.dumps(bot.kb_reply(), ensure_ascii=False)
 
 
 def test_bot_ads_respect_plan_and_interval(env, tgrec):
@@ -423,7 +439,7 @@ def test_bot_ads_respect_plan_and_interval(env, tgrec):
     n = len(tgrec.calls)
     asyncio.run(bot._maybe_ad(1, "u-free", "free@example.com"))                       # oraliq tugamagan -> yana yuborilmaydi
     assert len(tgrec.calls) == n
-    for uid, email in (("u-pro", "pro@example.com"), ("u-boss", "boss@example.com")):  # Pro va admin hech qachon
+    for uid, email in (("u-pro", "pro@example.com"), ("u-boss", "boss@example.com")):  # reklamasiz hisoblar va admin hech qachon
         asyncio.run(bot._maybe_ad(1, uid, email))
     assert len(tgrec.calls) == n
     ads._bot_last.clear()

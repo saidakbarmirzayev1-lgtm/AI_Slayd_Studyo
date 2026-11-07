@@ -324,6 +324,35 @@ def _get_user_row(uid: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def resolve_target(q: str) -> Dict[str, Any]:
+    """Bot admin buyruqlari uchun: Telegram ID / email / UUID -> user_usage qatori.
+    Telegram ID ulangan Google akkauntga ishora qilsa, SHU akkaunt olinadi (bot balansni shu yerdan o'qiydi)."""
+    q = (q or "").strip().lstrip("@")
+    sb = _sb()
+    if not q or not sb:
+        raise AdminError("Foydalanuvchi ID/email kiriting")
+    if q.isdigit():
+        row = _linked_row_by_tg(int(q))
+        if row:
+            return _get_user_row(str(row["user_id"]))
+        rows, _ = _select_users(lambda cols: sb.table("user_usage").select(cols).eq("email", f"tg{int(q)}@t.me").limit(1))
+        if rows:
+            return rows[0]
+        raise AdminError("Topilmadi. Foydalanuvchi botga hali /start bosmagan.", 404)
+    if UUID_RE.match(q):
+        return _get_user_row(q)
+    if "@" in q:
+        em = q.lower()
+        rows, _ = _select_users(lambda cols: sb.table("user_usage").select(cols).eq("email", em).limit(1))
+        if rows:
+            return rows[0]
+    raise AdminError("Topilmadi. Telegram ID, email yoki UUID yozing.", 404)
+
+
+def user_brief(uid: str) -> Dict[str, Any]:
+    return _brief(_get_user_row(uid), _tg_map([uid]))
+
+
 CORE_KEYS = {"free_credits", "paid_credits", "slide_credits", "last_reset_time", "blocked"}
 
 
