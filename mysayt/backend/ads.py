@@ -75,7 +75,7 @@ def clean_ad(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[s
         if not murl:
             return None, "Media havolasi yoki rasm yuklang"
         if murl.startswith("tg:"):
-            place = "bot"
+            pass          # Telegram fayl: botga to'g'ridan-to'g'ri, saytga server orqali uzatiladi
         elif murl.startswith("data:"):
             if mtype != "image" or not _DATA_IMG.match(murl) or len(murl) > MAX_DATA_URL:
                 return None, "Rasm juda katta yoki formati noto'g'ri (PNG/JPG/WEBP, ~1 MB gacha)"
@@ -160,7 +160,7 @@ def media_path(row: Dict[str, Any]) -> str:
     u = str(row.get("media_url") or "")
     if row.get("media_type") == "none" or not u:
         return ""
-    return f"/api/ads/media/{int(row['id'])}" if u.startswith("data:") else u
+    return f"/api/ads/media/{int(row['id'])}" if (u.startswith("data:") or u.startswith("tg:")) else u
 
 
 def public(row: Dict[str, Any], surface: str) -> Dict[str, Any]:

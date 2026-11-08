@@ -1498,13 +1498,32 @@ async def ads_click(ad_id: int, s: str = "site"):
     return RedirectResponse(link, status_code=302, headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"})
 
 @app.get("/api/ads/media/{ad_id}")
-async def ads_media(ad_id: int):
+async def ads_media(ad_id: int, request: Request):
     row = await asyncio.to_thread(ads_mod.get_row, ad_id)
-    dec = ads_mod.decode_data_url(str((row or {}).get("media_url") or ""))
-    if not row or not dec or not row.get("active"):
+    if not row or not row.get("active"):
+        raise HTTPException(404, "Topilmadi")
+    u = str(row.get("media_url") or "")
+    hdr = {"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes"}
+    if u.startswith("tg:"):
+        got = await tgbot.fetch_ad_file(u[3:])
+        if not got:
+            raise HTTPException(404, "Fayl topilmadi")
+        data, mime = got
+        rng = request.headers.get("range", "")
+        m = _re.match(r"bytes=(\d*)-(\d*)", rng)
+        if m and (m.group(1) or m.group(2)):
+            n = len(data)
+            a = int(m.group(1)) if m.group(1) else max(0, n - int(m.group(2)))
+            b = int(m.group(2)) if (m.group(1) and m.group(2)) else n - 1
+            a, b = min(a, n - 1), min(b, n - 1)
+            return Response(content=data[a:b + 1], status_code=206, media_type=mime,
+                            headers={**hdr, "Content-Range": f"bytes {a}-{b}/{n}"})
+        return Response(content=data, media_type=mime, headers=hdr)
+    dec = ads_mod.decode_data_url(u)
+    if not dec:
         raise HTTPException(404, "Topilmadi")
     data, mime = dec
-    return Response(content=data, media_type=mime, headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
+    return Response(content=data, media_type=mime, headers=hdr)
 
 @app.post("/api/me/admin-entry")
 async def me_admin_entry(payload: Dict[str, Any] = None):

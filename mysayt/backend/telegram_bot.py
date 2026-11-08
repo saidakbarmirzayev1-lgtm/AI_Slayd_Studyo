@@ -1137,12 +1137,28 @@ async def _deliver_ad(chat_id: int, title: str, body: str, mtype: str, media: st
     if label:
         text += "\n<i>📢 Reklama</i>"
     kb = _akb([[{"text": f"🔗 {btn_text}", "url": link}]]) if link else None
+    blob: Optional[bytes] = None
     if media.startswith("tg:"):
         media = media[3:]
+    elif media.startswith("data:"):
+        try:
+            blob = base64.b64decode(media.split(",", 1)[1])
+        except Exception:
+            blob = None
+        media = ""
     elif media.startswith("/"):
         media = SITE_URL + media
     sent = None
-    if media and mtype == "image":
+    if blob and mtype == "image":
+        try:        # baytlarni o'zimiz yuklaymiz (Telegram bizning serverga kirib o'tirmaydi — ishonchliroq)
+            r = await _http().post(f"{API}/sendPhoto", data={"chat_id": str(chat_id), "caption": text[:1000], "parse_mode": "HTML",
+                                                            **({"reply_markup": json.dumps(kb)} if kb else {})},
+                                   files={"photo": ("ad.jpg", blob, "image/jpeg")}, timeout=httpx.Timeout(40.0, connect=8.0))
+            j = r.json()
+            sent = j.get("result") if j.get("ok") else None
+        except Exception as e:
+            _warn("adup", f"reklama rasmi yuborilmadi: {type(e).__name__}")
+    elif media and mtype == "image":
         sent = await tg("sendPhoto", chat_id=chat_id, photo=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb)
     elif media and mtype == "video":
         sent = await tg("sendVideo", chat_id=chat_id, video=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb, supports_streaming=True)
@@ -1217,7 +1233,8 @@ async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
         return
     _state(cid).pop("adm", None)
     await _show(cid, mid, f"✅ <b>Reklama joylandi</b> (#{res.get('id')})\n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
-                _akb([[_btn("📢 Reklamalar", "a:ads")], _HOME]))
+                _akb([[_btn("📤 Hozir hammaga yuborish", f"a:ad:p:{res.get('id')}")] if res.get("id") else [_btn("📢 Reklamalar", "a:ads")],
+                      [_btn("📢 Reklamalar", "a:ads")], _HOME]))
 
 
 async def _photo_to_data_url(file_id: str) -> Optional[str]:
@@ -1298,7 +1315,10 @@ async def _admin_input(cid: int, user: dict, msg: dict, st: dict) -> bool:
                 return True
             ad.update(media_type="image", media_url=url)
         elif isinstance(vid, dict) and vid.get("file_id"):
-            ad.update(media_type="video", media_url="tg:" + str(vid["file_id"]), placement="bot")
+            if int(vid.get("file_size") or 0) > 20 * 1024 * 1024:
+                await _send(cid, "⚠️ Video 20 MB dan katta. Qisqaroq (20 MB gacha) video yuboring.")
+                return True
+            ad.update(media_type="video", media_url="tg:" + str(vid["file_id"]))
         else:
             await _send(cid, "📸 Rasm yoki 🎬 video yuboring (matn emas).", _wiz_nav([[_btn("⏭ Mediasiz", "a:w:nomedia")]]))
             return True
@@ -2161,6 +2181,29 @@ async def _download_tg_file(file_id: str, limit: int = PPTX_MAX) -> Optional[byt
     except Exception as e:
         _warn("dl", f"fayl yuklab olinmadi: {type(e).__name__}")
     return None
+
+
+_AD_FILE_CACHE: "OrderedDict[str, Tuple[bytes, str]]" = OrderedDict()
+_AD_FILE_CACHE_MAX = 60 * 1024 * 1024
+
+
+async def fetch_ad_file(file_id: str) -> Optional[Tuple[bytes, str]]:
+    """Telegram'dagi video/rasmni (file_id) o'qib beradi — saytdagi reklama uchun. 20 MB gacha, keshlanadi."""
+    hit = _AD_FILE_CACHE.get(file_id)
+    if hit:
+        _AD_FILE_CACHE.move_to_end(file_id)
+        return hit
+    info = await tg("getFile", file_id=file_id)
+    path = (info or {}).get("file_path") if isinstance(info, dict) else None
+    data = await _download_tg_file(file_id, 20 * 1024 * 1024)
+    if not data:
+        return None
+    ext = (path or "").rsplit(".", 1)[-1].lower()
+    mime = {"mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext, "video/mp4")
+    _AD_FILE_CACHE[file_id] = (data, mime)
+    while sum(len(v[0]) for v in _AD_FILE_CACHE.values()) > _AD_FILE_CACHE_MAX and len(_AD_FILE_CACHE) > 1:
+        _AD_FILE_CACHE.popitem(last=False)
+    return data, mime
 
 
 _TR_REV = {"fade": "fade", "zoom": "zoom", "cover": "flip", "push": "up", "dissolve": "blur"}

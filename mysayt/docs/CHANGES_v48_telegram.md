@@ -54,3 +54,7 @@
 - Admin panel bosh sahifasida buyruqlar ro'yxati ham ko'rinadi.
 - Reklama: "📤 Hozir hammaga" (Pro/VIP/adminlardan tashqari foydalanuvchilarga darhol yuborish) va "🔁 Joyi" (bot/sayt/ikkalasi) tugmalari.
 - Admin (ulangan Telegram admin) saytda reklama ko'rmaydi.
+
+## v49.4
+- Reklama videosi/rasmi endi to'liq chiqadi: rasm baytlari botdan to'g'ridan-to'g'ri yuklanadi; Telegram videosi (20 MB gacha) sayt/Muharrirda ham `/api/ads/media/ID` orqali (Range bilan) ko'rsatiladi — video reklama endi "bot+sayt" bo'la oladi.
+- Reklama joylangach "📤 Hozir hammaga yuborish" tugmasi chiqadi.
