@@ -127,6 +127,7 @@
             _tgt.classList.remove('pres-anim-next', 'pres-anim-prev');
             void _tgt.offsetWidth;
             _tgt.classList.add(_presTransitionDir === 'prev' ? 'pres-anim-prev' : 'pres-anim-next');
+            try { if (window.ssApplyPresTransition) window.ssApplyPresTransition(_tgt, slide); } catch (e) {}   // v48: slayd o'tish animatsiyasi
           } catch (e) {  }
           requestAnimationFrame(() => {
             imgEl.classList.add('loaded');

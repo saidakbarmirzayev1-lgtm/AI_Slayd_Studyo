@@ -218,6 +218,15 @@ async def _deep_presearch(client: Any, context: str, max_q: int = 3, websocket: 
     Kichik tez model inglizcha so'rovlarni yozadi, qidiruv parallel ishlaydi. Xatoda bo'sh matn (oqim buzilmaydi)."""
     if not _search_images_sync:
         return ""
+
+    async def _ev(payload: dict) -> None:           # Tez AI dagi kabi chatda «qidirilmoqda» ko'rinadi
+        if websocket is not None:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
+    _first = "mavzuga mos rasmlar"
+    await _ev({"type": "search_start", "query": _first, "kind": "photo", "n": 0})      # darhol: foydalanuvchi qidiruv boshlanganini ko'radi
     try:
         r = await asyncio.wait_for(client.chat.completions.create(
             model="deepseek-chat", temperature=0, max_tokens=160, response_format={"type": "json_object"},
@@ -227,16 +236,12 @@ async def _deep_presearch(client: Any, context: str, max_q: int = 3, websocket: 
         qs = json.loads(r.choices[0].message.content or "{}").get("queries") or []
     except Exception as e:
         print(f"[DEEP-IMG] so'rov yozilmadi: {type(e).__name__}")
+        await _ev({"type": "search_done", "query": _first, "kind": "photo", "count": 0})
         return ""
     qs = [str(q).strip()[:60] for q in qs if str(q).strip()][:max_q]
+    await _ev({"type": "search_done", "query": _first, "kind": "photo", "count": len(qs)})
     if not qs:
         return ""
-    async def _ev(payload: dict) -> None:           # Tez AI dagi kabi chatda «qidirilmoqda» ko'rinadi
-        if websocket is not None:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                pass
     for n, q in enumerate(qs, 1):
         await _ev({"type": "search_start", "query": q, "kind": "photo", "n": n})
     res = await asyncio.gather(*[asyncio.wait_for(asyncio.to_thread(_search_images_sync, q, "photo", 8), timeout=25) for q in qs], return_exceptions=True)

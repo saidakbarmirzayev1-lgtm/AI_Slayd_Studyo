@@ -558,7 +558,7 @@ async def _charge(uid: str, email: str, pages: int, tokens: int, mode: str, deta
 # Supabase: faqat MA'LUMOT (qisqa slayd JSON, ulanish). Fayllar (PPTX/PDF/HTML) HECH QACHON saqlanmaydi.
 # Jadvallar: SUPABASE_TELEGRAM.sql. Jadval yo'q bo'lsa bot baribir ishlaydi (faqat RAM, restartda tarix yo'qoladi).
 # ----------------------------------------------------------------------------------------------
-MAX_SAVED = 5
+MAX_SAVED = 1          # faqat OXIRGI slayd saqlanadi (yangisi eskisini almashtiradi)
 LINK_TTL = 600
 
 

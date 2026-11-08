@@ -54,13 +54,17 @@
     '.ssset-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;border:0;border-radius:12px;padding:12px;font:inherit;font-weight:600;cursor:pointer;background:#f1f3f4;color:#1f2937;margin-top:8px}',
     '.ssset-btn.pri{background:#1a73e8;color:#fff}.ssset-btn.gold{background:#f5b301;color:#2b2100}.ssset-btn.adm{background:#111827;color:#fff}',
     '.ssset-btn:disabled{opacity:.6}.ssset small{color:#6b7280}',
-    '#ssAdSlot{flex:none;margin:8px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;font:12px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2937;position:relative}',
-    '#ssAdSlot .ad-tag{position:absolute;top:6px;left:6px;z-index:2;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:1px 6px;font-size:10px;letter-spacing:.03em}',
-    '#ssAdSlot .ad-media{display:block;width:100%;max-height:112px;object-fit:cover;background:#f1f3f4}',
-    '#ssAdSlot .ad-body{padding:9px 10px}#ssAdSlot b{display:block;font-size:13px;margin-bottom:2px}',
-    '#ssAdSlot p{margin:0 0 8px;color:#4b5563;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}',
-    '#ssAdSlot a.ad-btn{display:block;text-align:center;background:#1a73e8;color:#fff;border-radius:8px;padding:7px;text-decoration:none;font-weight:600}',
-    '#ssAdSlot .ad-pro{display:block;width:100%;background:none;border:0;border-top:1px solid #eef0f3;padding:6px;color:#6b7280;font-size:11px;cursor:pointer}',
+    '#ssAdSlot{flex:none;display:flex;align-items:center;gap:6px;padding:4px;margin-top:2px;border-top:1px dashed #dadce0;font:12px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}',
+    '#ssAdSlot .ad-num{width:14px;flex:none;text-align:right;font-size:11px;color:#9aa0a6}',
+    '#ssAdSlot .ad-card{position:relative;flex:1;min-width:0;height:95px;border:2px solid #f2c94c;border-radius:6px;overflow:hidden;background:linear-gradient(135deg,#1a73e8,#7c3aed);color:#fff;display:block;text-decoration:none;cursor:default}',
+    '#ssAdSlot a.ad-card{cursor:pointer}',
+    '#ssAdSlot .ad-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}',
+    '#ssAdSlot .ad-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.05) 25%,rgba(0,0,0,.72))}',
+    '#ssAdSlot .ad-tag{position:absolute;top:4px;left:4px;z-index:2;background:rgba(0,0,0,.6);color:#fff;border-radius:5px;padding:0 5px;font-size:9px;letter-spacing:.03em}',
+    '#ssAdSlot .ad-body{position:absolute;left:0;right:0;bottom:0;padding:6px 8px;z-index:2}',
+    '#ssAdSlot .ad-body b{display:block;font-size:12px;line-height:1.2;text-shadow:0 1px 3px rgba(0,0,0,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '#ssAdSlot .ad-body p{margin:1px 0 0;font-size:10px;line-height:1.25;opacity:.92;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}',
+    '#ssAdSlot .ad-go{position:absolute;top:4px;right:4px;z-index:2;background:#fff;color:#1a56db;border-radius:99px;padding:1px 8px;font-size:10px;font-weight:700;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '#ssAnn{position:fixed;top:64px;right:12px;z-index:2147482000;max-width:min(360px,calc(100vw - 24px));background:#111827;color:#fff;border-radius:12px;padding:10px 34px 10px 12px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)}',
     '#ssAnn button{position:absolute;top:4px;right:6px;background:none;border:0;color:#9ca3af;font-size:18px;cursor:pointer}'
   ].join('\n');
@@ -231,25 +235,29 @@
     var media = '';
     if (ad.media_url && ad.media_type === 'image') media = '<img class="ad-media" src="' + esc(ad.media_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">';
     else if (ad.media_url && ad.media_type === 'video') media = '<video class="ad-media" src="' + esc(ad.media_url) + '" autoplay muted loop playsinline preload="metadata"></video>';
+    var inner = media + (media ? '<div class="ad-shade"></div>' : '') + '<span class="ad-tag">Reklama</span>' +
+      (ad.has_link ? '<span class="ad-go">' + esc(ad.button_text || 'Batafsil') + ' ›</span>' : '') +
+      '<div class="ad-body">' + (ad.title ? '<b>' + esc(ad.title) + '</b>' : '') + (ad.body ? '<p>' + esc(ad.body) + '</p>' : '') + '</div>';
     el.dataset.ad = ad.id;
-    el.innerHTML = '<span class="ad-tag">Reklama</span>' + media + '<div class="ad-body">' +
-      (ad.title ? '<b>' + esc(ad.title) + '</b>' : '') + (ad.body ? '<p>' + esc(ad.body) + '</p>' : '') +
-      (ad.has_link ? '<a class="ad-btn" target="_blank" rel="noopener sponsored" href="' + esc(ad.click_url) + '">' + esc(ad.button_text || 'Batafsil') + '</a>' : '') +
-      '</div><button type="button" class="ad-pro">👑 Reklamasiz ishlash — Pro</button>';
-    var a = el.querySelector('a.ad-btn');
+    // butun karta bitta slayd kabi; havola bo'lsa rasm (karta) o'zi bosiladi
+    el.innerHTML = '<span class="ad-num">📢</span>' + (ad.has_link
+      ? '<a class="ad-card" target="_blank" rel="noopener sponsored" href="' + esc(ad.click_url) + '">' + inner + '</a>'
+      : '<div class="ad-card">' + inner + '</div>');
+    var a = el.querySelector('a.ad-card');
     if (a && tgw) a.addEventListener('click', function (e) { e.preventDefault(); openExternal(ad.click_url); });
-    el.querySelector('.ad-pro').addEventListener('click', function (e) { e.preventDefault(); openSettingsV47(); });
   }
 
+  var slotEl = null;
   function ensureSlot() {
     var sb = $('sidebar'); if (!sb) return;
-    var el = $('ssAdSlot');
-    if (!curAd) { if (el) el.remove(); return; }
-    if (!el) { el = document.createElement('div'); el.id = 'ssAdSlot'; }
-    if (el.dataset.ad !== String(curAd.id)) renderAdInto(el, curAd);
-    var user = sb.querySelector('.sidebar-user-section');
-    var wrongSpot = el.parentNode !== sb || (user ? el.nextElementSibling !== user : sb.lastElementChild !== el);
-    if (wrongSpot) { if (user) sb.insertBefore(el, user); else sb.appendChild(el); }
+    var scroll = sb.querySelector('.sidebar-slides-scroll');
+    if (!curAd) { if (slotEl && slotEl.parentNode) slotEl.remove(); return; }
+    if (!scroll) return;
+    if (!slotEl) { slotEl = document.createElement('div'); slotEl.id = 'ssAdSlot'; }
+    if (slotEl.dataset.ad !== String(curAd.id)) renderAdInto(slotEl, curAd);
+    var addBtn = scroll.querySelector('.btn-add-slide-bottom');
+    var ok = slotEl.parentNode === scroll && (addBtn ? slotEl.nextElementSibling === addBtn : scroll.lastElementChild === slotEl);
+    if (!ok) { if (addBtn) scroll.insertBefore(slotEl, addBtn); else scroll.appendChild(slotEl); }
   }
 
   async function fetchAd() {

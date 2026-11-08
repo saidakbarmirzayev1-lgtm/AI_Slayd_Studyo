@@ -1549,6 +1549,7 @@
           '<label class="ap-chk"><input type="checkbox" ' + (spec.loop ? 'checked' : '') + ' onchange="AnimKit.param(\'animLoop\',this.checked);AnimKit.preview()"> Takrorlash (cheksiz)</label>' +
           '</div>';
       }
+      try { if (window.ssTransitionsHtml) h += window.ssTransitionsHtml(); } catch (e) {}   // v48: butun slayd o'tishi
       h += '<div class="ap-actions">' +
         '<button class="ap-btn" onclick="AnimKit.preview()"><span class="material-symbols-outlined">play_arrow</span> Ko\'rish</button>' +
         '<button class="ap-btn" onclick="AnimKit.previewSlide()"><span class="material-symbols-outlined">slideshow</span> Butun slayd</button>' +

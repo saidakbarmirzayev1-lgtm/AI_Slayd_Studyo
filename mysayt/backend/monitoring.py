@@ -93,7 +93,7 @@ PLANS = [
 ]
 
 FREE_ACTIONS = {
-    "switch_slide", "change_slide", "goto_slide",
+    "switch_slide", "change_slide", "goto_slide", "set_transition", "slide_transition",
     "success", "error", "reply", "noop", "none", "message",
 }
 

@@ -70,7 +70,7 @@
     var sprites = {};
     try { if (window.ssBuildSprites) sprites = await window.ssBuildSprites(parsed); } catch (e) {  }
     window.__ssPresData = {
-      project: { title: (typeof projectTitle === 'string' ? projectTitle : ''), slides: list.map(function (s) { return { json: s.json }; }) },
+      project: { title: (typeof projectTitle === 'string' ? projectTitle : ''), slides: list.map(function (s) { return { json: s.json, transition: s.transition || '' }; }) },
       slides: parsed, sprites: sprites
     };
     var anim = ''; try { var ae = $('ssAnimStyle'); if (ae) anim = (ae.textContent || '').replace(/<\/style/gi, ''); } catch (e) {  }
@@ -224,7 +224,7 @@
   setTimeout(function () { window.__ssRestoreChecked = true; }, 12000);
   var armedAt = Date.now() + 8000;   // ishga tushgandan keyin 8 soniya saqlanmaydi (tiklash tugashi uchun)
   async function persistNow(force) {
-    return;   // v46: avto-saqlash O'CHIRILGAN — sahifa ochilsa/yangilansa har doim toza, yangi slayd (IndexedDB'ga yozilmaydi)
+    // v48: faqat OXIRGI loyiha saqlanadi (bitta kalit 'current'); «Rasmni tozalash» bosilganda yangisi eskisini almashtiradi
     if (saving || typeof indexedDB === 'undefined') return;
     if (!window.__ssRestoreChecked || Date.now() < armedAt) return;
     if (!slides || !slides.length) return;
@@ -238,7 +238,7 @@
       for (var i = 0; i < list.length; i++) {
         var p = {}; try { p = JSON.parse(list[i].json || '{}'); } catch (e) { p = {}; }
         await detachBlobs(p, 0);
-        out.push({ json: JSON.stringify(p), thumb: list[i].thumb || '', imageNumbers: list[i].imageNumbers || [] });
+        out.push({ json: JSON.stringify(p), thumb: list[i].thumb || '', imageNumbers: list[i].imageNumbers || [], transition: list[i].transition || '' });
       }
       await idbPut({ v: 1, title: projectTitle, activeIndex: activeIndex, slides: out, savedAt: Date.now() });
       lastSavedSig = sig;
@@ -253,10 +253,13 @@
 
   /** 03_auth_project.js: initProjectFromUrl() ishga tushishida chaqiriladi */
   window.ssLoadSavedProject = async function () {
-    // v46: eski versiyalar IndexedDB'da qoldirgan loyiha ham o'chiriladi va HECH QACHON tiklanmaydi
+    // v48: oxirgi saqlangan loyiha tiklanadi (faqat bitta). Xato bo'lsa — toza yangi loyiha.
     window.__ssRestoreChecked = true;
-    try { if (typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(DB_NAME); } catch (e) {}
-    return null;
+    try {
+      if (typeof indexedDB === 'undefined') return null;
+      var r = await pTimeoutP(idbGet(), 4000);
+      return (r && Array.isArray(r.slides) && r.slides.length) ? r : null;
+    } catch (e) { return null; }
   };
   function pTimeoutP(p, ms) { return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(null); }, ms); })]); }
 

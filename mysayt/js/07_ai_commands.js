@@ -690,6 +690,22 @@
               await aiStyleMedia(cmd);
               break;
             }
+            case 'set_transition':
+            case 'slide_transition': {
+              // v48: butun slayd o'tish animatsiyasi: {"action":"set_transition","slide":N | "target":"all","transition":"fade|zoom|flip|up|blur|none"}
+              try {
+                const _tr = String(cmd.transition || cmd.type || cmd.name || '').toLowerCase();
+                if (cmd.target === 'all' || cmd.all === true) {
+                  const cur = slides[activeIndex];
+                  if (cur) { cur.transition = _tr === 'default' ? '' : _tr; }
+                  window.ssSetTransition && window.ssSetTransition(cur ? cur.transition : _tr, true);
+                } else {
+                  const _ti = ((cmd.slide != null ? cmd.slide : (activeIndex + 1)) || 1) - 1;
+                  if (_ti >= 0 && _ti < slides.length) window.ssSetTransition && window.ssSetTransition(_tr === 'default' ? '' : _tr, false, _ti);
+                }
+              } catch (e) { console.warn('set_transition:', e); }
+              break;
+            }
             case 'set_animation':
             case 'animate':
             case 'add_animation': {

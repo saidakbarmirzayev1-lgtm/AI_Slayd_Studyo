@@ -17,3 +17,8 @@
 - Sayt, Chuqur AI: deepseek-reasoner tool chaqira olmasligi sabab rasm qidirilmasdi — endi server rasmlarni oldindan topib, tayyor URL ro'yxatini beradi (main.py: _deep_presearch).
 - Sayt, Chuqur AI: tool matni (DSML) chiqib javob to'xtab qolishi tuzatildi: reasoner uchun tool eslatmalari olib tashlandi + bir marta avtomatik qayta so'rash.
 - Sayt, Chuqur AI: rasm qidirilayotgani chatda Tez AI dagi kabi ko'rinadi (search_start/search_done).
+- **Reklama (sayt):** slaydlar ro'yxati eng tagida slayd shaklidagi karta (16:9, «Reklama» belgisi); havola bo'lsa butun rasm bosiladi. Admin panelda «Necha soat ko'rsatilsin?» tugmalari (1 soat … 30 kun, cheksiz). Pro/admin ko'rmaydi. Botda rasm/video + havola tugmasi avvaldan bor.
+- **Faqat oxirgi slayd:** botda 1 ta (MAX_SAVED=1); saytda IndexedDB'dagi bitta «current» loyiha qayta yoqildi — sahifa ochilganda tiklanadi, «Rasmni tozalash» bosilganda yangisi eskisini almashtiradi.
+- **Slayd o'tish animatsiyasi** (butun slayd): Animatsiya panelida (fade, zoom, flip, pastdan, blur, yo'q; «hammasiga»), Namoyishda o'ynaydi. AI: `set_transition` (bepul).
+- **Jadval va grafik:** asboblar panelida «Jadval» / «Grafik» tugmalari; AI `elements[]` ichida `{"type":"table"|"chart"}` yaratadi (ustunli, chiziqli, doira, halqa). PPTX ga rasm bo'lib o'tadi.
+- **Chuqur AI:** rasm qidirish darhol «qidirilmoqda» ko'rsatadi.

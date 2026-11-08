@@ -146,11 +146,21 @@ function editAd(id){
   ${a.media_is_upload?'<small style="color:var(--mut)">Hozir yuklangan rasm bor — yangi tanlamasangiz o\'zgarmaydi.</small>':''}
   <label>Bosilganda ochiladigan havola (https://…)</label><input id="a_l" placeholder="https://…" value="${esc(a.link_url)}">
   <div class="row"><div><label>Tugma matni</label><input id="a_bt" maxlength="24" value="${esc(a.button_text)}" oninput="prev()"></div><div><label>Joylashuv</label><select id="a_p"><option value="both">Sayt + Bot</option><option value="site">Faqat sayt</option><option value="bot">Faqat bot</option></select></div></div>
+  <label>Necha soat ko'rsatilsin? <small style="color:var(--mut)">(bosing — tugash vaqti avtomatik qo'yiladi)</small></label>
+  <div class="chips" id="a_hrs">${[[1,'1 soat'],[6,'6 soat'],[12,'12 soat'],[24,'1 kun'],[72,'3 kun'],[168,'7 kun'],[720,'30 kun'],[0,'Cheksiz']].map(h=>`<span class="chip" onclick="setHrs(${h[0]})">${h[1]}</span>`).join('')}<input id="a_hc" type="number" min="1" placeholder="soat" style="width:84px;flex:none" onchange="setHrs(+this.value)"></div>
   <div class="row"><div><label>Boshlanish</label><input type="datetime-local" id="a_s" value="${loc(a.starts_at)}"></div><div><label>Tugash</label><input type="datetime-local" id="a_e" value="${loc(a.ends_at)}"></div></div>
   <div class="row"><div><label>Ko'rsatish ustuvorligi (1–100)</label><input type="number" id="a_w" min="1" max="100" value="${a.weight||1}"></div><div><label>Holat</label><select id="a_a"><option value="1">Faol</option><option value="0">O'chiq</option></select></div></div>
   <label>Ko'rinishi</label><div class="preview" id="a_pv"></div>
   <div class="row" style="margin-top:14px"><button class="btn" onclick="saveAd(${id||0})">Saqlash</button></div>`);
   $('#a_mt').value=a.media_type;$('#a_p').value=a.placement;$('#a_a').value=a.active?'1':'0';prev(a.media_is_upload?a.media_preview:null);
+}
+function setHrs(h){
+  const f=d=>new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  const now=new Date();
+  if(!h||h<=0){$('#a_s').value='';$('#a_e').value='';toast('Muddat cheklanmagan');return;}
+  $('#a_s').value=f(now);$('#a_e').value=f(new Date(now.getTime()+h*3600000));
+  document.querySelectorAll('#a_hrs .chip').forEach(c=>c.classList.remove('on'));
+  toast('Tugash: '+fdate($('#a_e').value));
 }
 function prev(keep){
   const t=$('#a_t').value,b=$('#a_b').value,mt=$('#a_mt').value,u=upData||$('#a_mu').value||keep||'';

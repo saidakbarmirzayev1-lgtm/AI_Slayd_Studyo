@@ -531,7 +531,7 @@
           currentProjectId = generateUUID();
           projectTitle = sv.title || projectTitle;
           const te2 = document.getElementById('presentationTitle'); if (te2) te2.innerText = projectTitle;
-          slides = sv.slides.map(function (s) { return { json: s.json || '{}', thumb: s.thumb || '', imageNumbers: s.imageNumbers || [] }; });
+          slides = sv.slides.map(function (s) { return { json: s.json || '{}', thumb: s.thumb || '', imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; });
           activeIndex = Math.max(0, Math.min(slides.length - 1, sv.activeIndex || 0));
           bumpObjectIdCounterFromSlides();
           renderSidebar();
