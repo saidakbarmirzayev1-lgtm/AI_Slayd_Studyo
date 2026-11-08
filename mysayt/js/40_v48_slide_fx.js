@@ -336,10 +336,13 @@
   function rerenderPanel2() { try { renderTrPanel(); } catch (e) {} }
   var _origSet = window.ssSetTransition;
   window.ssSetTransition = function () { var r = _origSet.apply(this, arguments); rerenderPanel2(); return r; };
-  document.addEventListener('click', function (e) {
-    var p = document.getElementById('ssTrPanel');
-    if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('#ssTrBtn,#ssTrTop'))) p.remove();
-  });
+  // v49.2: panel faqat × bilan yopiladi (Animatsiya paneli kabi); varaq almashsa tanlov yangilanadi
+  var _trLast = null;
+  setInterval(function () {
+    var p = document.getElementById('ssTrPanel'); if (!p) { _trLast = null; return; }
+    var s = curSlide(), k = (typeof activeIndex !== 'undefined' ? activeIndex : '') + '|' + ((s && s.transition) || '');
+    if (k !== _trLast) { _trLast = k; renderTrPanel(); }
+  }, 400);
   function addTransitionButtons() {
     var ok = false;
     var anim = document.querySelector('.tb-btn[title="Animatsiya"]');

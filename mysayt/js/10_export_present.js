@@ -246,6 +246,16 @@
           const text = await file.text();
 
           let projectData = null;
+          // v49.2: bot yasagan HTML — ichida PPTX nusxasi bor: shuni muharrirga ochamiz
+          const mp = text.match(/<script[^>]*id=["']ss-pptx["'][^>]*>([\s\S]*?)<\/script>/i);
+          if (mp && mp[1] && typeof importPptxClient === 'function') {
+            try {
+              const bin = atob(mp[1].trim()), u8 = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+              await importPptxClient(new File([u8], (file.name || 'taqdimot').replace(/\.html?$/i, '') + '.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }));
+              return;
+            } catch (e) { console.warn('ss-pptx:', e); }
+          }
           const m1 = text.match(/<script[^>]*id=["']project-data["'][^>]*>([\s\S]*?)<\/script>/i);
           if (m1 && m1[1]) {
             try { projectData = JSON.parse(m1[1].trim()); } catch (e) {}
@@ -283,7 +293,8 @@
               slides = list.map(s => ({
                 json: s.json || '{}',
                 thumb: s.thumb || '',
-                imageNumbers: s.imageNumbers || []
+                imageNumbers: s.imageNumbers || [],
+                transition: s.transition || ''
               }));
               activeIndex = 0;
               bumpObjectIdCounterFromSlides();

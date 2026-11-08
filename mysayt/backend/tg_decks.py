@@ -1202,7 +1202,7 @@ var h=parseInt((location.hash||'').slice(1),10);show(isNaN(h)?0:h-1);
 """.replace("{{", "{").replace("}}", "}")
 
 
-def render_html(scenes: List[Scene], title: str, lang: str = "uz") -> bytes:
+def render_html(scenes: List[Scene], title: str, lang: str = "uz", pptx: Optional[bytes] = None) -> bytes:
     e = _html.escape
     out = [_HTML_HEAD.format(title=e(title or "Taqdimot"), lang=e(lang or "uz"))]
     for sc in scenes:
@@ -1253,7 +1253,13 @@ def render_html(scenes: List[Scene], title: str, lang: str = "uz") -> bytes:
             out.insert(sec_at + 1, '<svg width="960" height="540" viewBox="0 0 960 540" style="position:absolute;left:0;top:0;pointer-events:none">' + "".join(svg) + "</svg>")
         out.append("</section>")
     out.append(_HTML_TAIL)
-    return "".join(out).encode("utf-8")
+    html_s = "".join(out)
+    if pptx:      # muharrirda qayta ochish uchun: PPTX nusxasi faylning ichida (v49.2)
+        import base64 as _b64
+        blob = '<script type="application/octet-stream" id="ss-pptx">' + _b64.b64encode(pptx).decode() + "</script>\n"
+        i = html_s.rfind("</body>")
+        html_s = (html_s[:i] + blob + html_s[i:]) if i >= 0 else (html_s + blob)
+    return html_s.encode("utf-8")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1273,17 +1279,18 @@ def export(deck: dict, images: Optional[Dict[int, bytes]], fmt: str, lang: str =
     if fmt == "pdf":
         return safe_filename(title, "pdf"), render_pdf(scenes, title), "application/pdf"
     if fmt == "html":
-        return safe_filename(title, "html"), render_html(scenes, title, lang), "text/html; charset=utf-8"
+        return safe_filename(title, "html"), render_html(scenes, title, lang, render_pptx(scenes, title)), "text/html; charset=utf-8"
     raise ValueError("noma'lum format")
 
 
 def export_all(deck: dict, images: Optional[Dict[int, bytes]], lang: str = "uz") -> List[Tuple[str, bytes, str]]:
     scenes = build_scenes(deck, images, lang)          # sahna bir marta quriladi (rasm kesish qimmat)
     title = deck.get("title") or "Taqdimot"
+    px = render_pptx(scenes, title)
     return [
-        (safe_filename(title, "pptx"), render_pptx(scenes, title), "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        (safe_filename(title, "pptx"), px, "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
         (safe_filename(title, "pdf"), render_pdf(scenes, title), "application/pdf"),
-        (safe_filename(title, "html"), render_html(scenes, title, lang), "text/html; charset=utf-8"),
+        (safe_filename(title, "html"), render_html(scenes, title, lang, px), "text/html; charset=utf-8"),
     ]
 
 

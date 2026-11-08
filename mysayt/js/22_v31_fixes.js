@@ -477,6 +477,7 @@
         o.mRadius = 0; if (o.clipPath) o.clipPath = null; if (o.rx) { o.rx = 0; o.ry = 0; }
       }
     });
+    return JSON.stringify(p);   // v49.2: import aslicha — qo'shimcha karta (rect) QO'SHILMAYDI
     var bg = typeof p.background === 'string' ? p.background : '#ffffff';
     if (p.backgroundImage || p.backgroundGif || p.backgroundVideo) return JSON.stringify(p);
     var dark = lum(bg) < 0.5;

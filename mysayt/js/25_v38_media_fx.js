@@ -235,14 +235,16 @@
       const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
       const toIdx = Number(item.dataset.idx);
       if (isNaN(fromIdx) || fromIdx === toIdx) return;
+      if (!slides[fromIdx] || !slides[toIdx]) return;
       saveCurrentSlideState();
+      const activeSlideObj = slides[activeIndex];
       const moved = slides.splice(fromIdx, 1)[0];
       slides.splice(toIdx, 0, moved);
-      if (activeIndex === fromIdx) activeIndex = toIdx;
-      else if (fromIdx < activeIndex && toIdx >= activeIndex) activeIndex--;
-      else if (fromIdx > activeIndex && toIdx <= activeIndex) activeIndex++;
+      // v49.2: faol varaq obyekti bo'yicha indeks — kanvas qayta yuklanmaydi (bo'sh qolish xavfi yo'q)
+      const ni = slides.indexOf(activeSlideObj);
+      if (ni >= 0) activeIndex = ni;
       renderSidebar();
-      loadSlideCanvas(activeIndex, updateSlideCounterUI);
+      try { updateSlideCounterUI(); } catch (e) {}
       recordGlobalState();
     });
     item.addEventListener('contextmenu', function (e) {

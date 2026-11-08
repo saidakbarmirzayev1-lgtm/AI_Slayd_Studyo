@@ -912,7 +912,7 @@ async def _admin_command(cid: int, user: dict, cmd: str, arg: str) -> None:
         return
     parts = arg.split()
     if not parts:
-        await _send(cid, ADMIN_HELP)
+        await _admin_home(cid)
         return
     actor = f"tg:{int(user['id'])}"
     target = parts[0]

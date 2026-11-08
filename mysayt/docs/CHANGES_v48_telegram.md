@@ -41,3 +41,10 @@
 - Namoyish: boshida boshqaruv tugmalari ko'rinadi, keyin yashirinadi; varaq ochilish effekti ("O'tish") alohida tugmada, viewerda ishlaydi, PPTX'ga `<p:transition>` yoziladi.
 - "Izohlar" tugmasi qaytarildi; tepadagi ortiqcha "Sozlamalar" olib tashlandi; bir marta bosganda tahrirga o'tish o'chirildi.
 - Botda to'liq tugmali admin panel (/admin): statistika, foydalanuvchilar, reklama (5 qadamli, muddat soat tugmalari bilan; video `tg:` orqali), xabar yuborish, sozlamalar.
+
+## v49.2
+- Saytda PPTX ochilganda qo'shimcha "karta" (matn orqasidagi to'rtburchak) qo'shilmaydi — dizayn asl holicha.
+- Varaqlarni sidebarda almashtirganda varaq bo'sh qolish xatosi: endi faol varaq obyekt bo'yicha topiladi, kanvas qayta yuklanmaydi.
+- O'tish paneli bosilganda yo'qolmaydi, faqat × bilan yopiladi; varaq almashsa tanlov yangilanadi.
+- Bot yasagan HTML ichiga PPTX nusxasi joylanadi — muharrirda to'liq tahrirlanadigan ochiladi; sayt HTML'ida o'tish effekti saqlanadi.
+- Botda /give, /take… argumentsiz yozilsa tugmali admin panel ochiladi.
