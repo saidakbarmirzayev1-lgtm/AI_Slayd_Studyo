@@ -494,10 +494,13 @@
     }
     window.isSolidBgColor = isSolidBgColor;
     let _canvasLoadGeneration = 0;
+    let _canvasDoneGen = 0;        // v49.3: oxirgi YAKUNLANGAN yuklash
+    let _canvasLoadingUntil = 0;   // v49.3: yuklash davomida saqlash taqiqlanadi (kanvas vaqtincha noto'g'ri bo'lishi mumkin)
     function loadSlideCanvas(index, callback) {
       const target = slides[index];
       if (!target) { if (callback) callback(); return; }
       const myGeneration = ++_canvasLoadGeneration;
+      _canvasLoadingUntil = Date.now() + 8000;
 
       let _preBg = '#f1f3f4';
       let _preHasMediaBg = false;
@@ -550,9 +553,15 @@
         let parsed = {};
         try { parsed = JSON.parse(target.json || '{}'); } catch (e) {}
         canvas.loadFromJSON(target.json, () => {
-          if (myGeneration !== _canvasLoadGeneration) { if (callback) callback(); return; }
+          if (myGeneration !== _canvasLoadGeneration) {
+            // v49.3: fabric loadFromJSON o'z kanvasini oxirida tozalab eskirgan obyektlarni qo'yadi.
+            // Yangi yuklash undan OLDIN tugagan bo'lsa — kanvas buzilgan: oxirgi varaqni qayta yuklaymiz.
+            if (_canvasDoneGen > myGeneration) { try { setTimeout(() => loadSlideCanvas(activeIndex), 0); } catch (e) {} }
+            if (callback) callback(); return;
+          }
           applyBackgroundToCanvas(canvas, parsed, () => {
             if (myGeneration !== _canvasLoadGeneration) { if (callback) callback(); return; }
+            _canvasDoneGen = myGeneration; _canvasLoadingUntil = 0;
             canvas.forEachObject((obj) => {
               obj.set({ objectCaching: false, dirty: true });
               if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') configureTextbox(obj);
@@ -664,6 +673,7 @@
     function saveCurrentSlideState(opts) {
       const force = !!(opts && opts.force);
       if (!slides[activeIndex]) return;
+      if (!force && Date.now() < _canvasLoadingUntil) return;   // v49.3: yuklash tugamaguncha saqlamaymiz
       if (window.isAiApplyingCommands || isAiApplyingCommands ||
           window.isAiStreaming || isAiStreaming ||
           isUndoRedoAction || window.isRedoUndoAction) {
@@ -1281,6 +1291,7 @@
     }
     function saveCurrentSlideStateDirectly() {
       if (!slides[activeIndex]) return;
+      if (Date.now() < _canvasLoadingUntil) return;
       try {
         slides[activeIndex].json = JSON.stringify(canvas.toJSON(SERIALIZE_PROPS));
         slides[activeIndex].thumb = safeToDataURL(canvas, { format: 'png', multiplier: 0.3 });

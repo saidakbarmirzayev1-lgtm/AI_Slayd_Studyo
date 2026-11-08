@@ -48,3 +48,9 @@
 - O'tish paneli bosilganda yo'qolmaydi, faqat × bilan yopiladi; varaq almashsa tanlov yangilanadi.
 - Bot yasagan HTML ichiga PPTX nusxasi joylanadi — muharrirda to'liq tahrirlanadigan ochiladi; sayt HTML'ida o'tish effekti saqlanadi.
 - Botda /give, /take… argumentsiz yozilsa tugmali admin panel ochiladi.
+
+## v49.3
+- Varaq almashtirganda boshqa varaq mazmuni kanvasga o'tib qolish (rasmli slaydlarda sekin yuklanish poygasi): eskirgan yuklash kanvasni buzsa, oxirgi varaq qayta yuklanadi; yuklash davomida saqlash to'xtatiladi.
+- Admin panel bosh sahifasida buyruqlar ro'yxati ham ko'rinadi.
+- Reklama: "📤 Hozir hammaga" (Pro/VIP/adminlardan tashqari foydalanuvchilarga darhol yuborish) va "🔁 Joyi" (bot/sayt/ikkalasi) tugmalari.
+- Admin (ulangan Telegram admin) saytda reklama ko'rmaydi.

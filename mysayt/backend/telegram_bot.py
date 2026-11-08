@@ -1005,7 +1005,7 @@ def _left_text(ends_at: Any) -> str:
 
 async def _admin_home(cid: int, mid: Optional[int] = None) -> None:
     _state(cid).pop("adm", None)
-    await _show(cid, mid, "🛡 <b>Admin panel</b>\nKerakli bo'limni tanlang 👇", _akb([
+    await _show(cid, mid, "🛡 <b>Admin panel</b>\nKerakli bo'limni tanlang 👇\n\n" + ADMIN_HELP.split("\n", 1)[1], _akb([
         [_btn("📊 Statistika", "a:stats"), _btn("👥 Foydalanuvchi", "a:u")],
         [_btn("📢 Reklamalar", "a:ads"), _btn("📣 Xabar yuborish", "a:bc")],
         [_btn("⚙️ Reklama sozlamalari", "a:set")],
@@ -1121,6 +1121,7 @@ async def _admin_ads(cid: int, mid: Optional[int], adm, user: dict) -> None:
         kb.append([_btn(f"👁 #{r['id']}", f"a:ad:v:{r['id']}"),
                    _btn(("⏸ O'chirish" if r.get("active") else "▶️ Yoqish") + f" #{r['id']}", f"a:ad:t:{r['id']}"),
                    _btn(f"🗑 #{r['id']}", f"a:ad:d:{r['id']}")])
+        kb.append([_btn(f"📤 Hozir hammaga #{r['id']}", f"a:ad:p:{r['id']}"), _btn(f"🔁 Joyi #{r['id']}", f"a:ad:pl:{r['id']}")])
     kb.append([_btn("➕ Yangi reklama", "a:ad:new")])
     kb.append(_HOME)
     await _show(cid, mid, "\n".join(lines), _akb(kb))
@@ -1388,6 +1389,56 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
             await _admin_ads(cid, mid, adm, user)
         elif sub == "d" and aid:
             await _show(cid, mid, f"🗑 <b>#{aid}</b> reklama o'chirilsinmi?\nBu qaytarilmaydi.", _akb([[_btn("✅ Ha, o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+        elif sub == "pl" and aid:
+            try:
+                from backend import ads as _ads
+                row = await asyncio.to_thread(_ads.get_row, aid)
+                order = ["both", "bot", "site"]
+                cur_pl = str((row or {}).get("placement") or "both")
+                new_pl = order[(order.index(cur_pl) + 1) % 3] if cur_pl in order else "both"
+                raw = dict(row)
+                raw["placement"] = new_pl
+                if str(raw.get("media_url") or "").startswith("tg:") and new_pl != "bot":
+                    new_pl = "bot"; raw["placement"] = "bot"
+                await asyncio.to_thread(adm._dispatch, "ad_save", {"ad": raw}, actor)
+            except Exception as e:
+                _warn("ad", f"joy o'zgarmadi: {type(e).__name__}")
+            await _admin_ads(cid, mid, adm, user)
+        elif sub == "p" and aid:
+            n = len(await asyncio.to_thread(adm._audience, "free"))
+            await _show(cid, mid, f"📤 <b>#{aid}</b> reklama hozir <b>{n}</b> ta foydalanuvchiga (Pro/VIP/adminlardan tashqari) yuboriladi.\nDavom etamizmi?",
+                        _akb([[_btn("✅ Yuborish", f"a:ad:pp:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+        elif sub == "pp" and aid:
+            try:
+                from backend import ads as _ads
+                row = await asyncio.to_thread(_ads.get_row, aid)
+                tids = await asyncio.to_thread(adm._audience, "free")
+            except Exception:
+                row, tids = None, []
+            if not row or not tids:
+                await _show(cid, mid, "⚠️ Reklama yoki qabul qiluvchi topilmadi.", _akb([[_btn("↩️ Orqaga", "a:ads")]]))
+            else:
+                pub = _ads.public(row, "bot")
+                link = (SITE_URL + pub["click_url"]) if pub["has_link"] else ""
+
+                async def _push():
+                    ok = bad = 0
+                    for tid in tids:
+                        try:
+                            if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"]):
+                                ok += 1
+                            else:
+                                bad += 1
+                        except Exception:
+                            bad += 1
+                        await asyncio.sleep(0.06)
+                    try:
+                        await asyncio.to_thread(_ads.bump, int(row["id"]), "impression")
+                    except Exception:
+                        pass
+                    await _send(cid, f"✅ Reklama #{aid} yuborildi: <b>{ok}</b> ta yetdi, {bad} ta yetmadi.")
+                asyncio.create_task(_push())
+                await _show(cid, mid, f"📤 Yuborish boshlandi ({len(tids)} ta). Tugagach xabar keladi.", _akb([[_btn("↩️ Reklamalar", "a:ads")], _HOME]))
         elif sub == "dd" and aid:
             await asyncio.to_thread(adm._dispatch, "ad_delete", {"id": aid}, actor)
             await _admin_ads(cid, mid, adm, user)

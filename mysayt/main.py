@@ -1464,6 +1464,12 @@ def _ad_free_for_token(token: str) -> bool:
         if r and r.user:
             u = get_or_create_user_usage(r.user.id, r.user.email or "")
             ok = bool(is_ad_free(u))
+            if not ok:       # v49.3: admin (Telegram ID + ulangan Google) reklama ko'rmaydi
+                try:
+                    lk = admin_core._linked_row_by_uid(str(r.user.id))
+                    ok = bool(lk and admin_core.is_tg_admin(lk.get("tg_id")))
+                except Exception:
+                    ok = False
     except Exception:
         ok = False
     if len(_adfree_cache) > 3000:
