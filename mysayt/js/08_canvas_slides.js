@@ -278,7 +278,7 @@
       const resetBtn = document.createElement('div');
       resetBtn.className = 'btn-reset-canvas';
       resetBtn.onclick = (e) => { e.stopPropagation(); if (window.ssResetCanvas) window.ssResetCanvas(); };
-      resetBtn.innerHTML = `<span class="material-symbols-outlined">restart_alt</span> Rasmni tozalash`;
+      resetBtn.innerHTML = `<span class="material-symbols-outlined">delete_sweep</span> Hamma varaqni tozalash`;
       scrollArea.appendChild(resetBtn);
       const aboutBtn = document.createElement('div');
       aboutBtn.className = 'btn-about-bot';

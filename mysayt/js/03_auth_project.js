@@ -450,13 +450,18 @@
           showToast("Google Login xatolik: " + ((error && error.message) || 'URL olinmadi'), 'error');
           return;
         }
-        // Shu sahifaning o'zida kirish (yangi oyna yo'q). Slaydlar window.name (faqat shu tabning RAM'i) orqali qaytib keladi.
+        // v49: kirgandan keyin hammasi 0 dan boshlanadi — ish bo'lsa avval ogohlantiramiz
         try {
-          if (typeof slides !== 'undefined' && slides.length) {
-            saveCurrentSlideState();
-            window.name = 'ssdraft:' + JSON.stringify({ id: currentProjectId, title: projectTitle, slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; }) });
+          if (window.ssHasWork && window.ssHasWork()) {
+            let ok = true;
+            if (window.Swal && Swal.fire) {
+              const r = await Swal.fire({ title: 'Google bilan kirasizmi?', text: "Kirganingizda hozirgi barcha varaqlar o'chib, hammasi 0 dan boshlanadi. Avval PPTX/PDF qilib yuklab oling.", icon: 'warning', showCancelButton: true, confirmButtonText: 'Baribir kirish', cancelButtonText: 'Bekor qilish', confirmButtonColor: '#d93025', reverseButtons: true });
+              ok = !!(r && r.isConfirmed);
+            } else ok = window.confirm("Kirganingizda hozirgi barcha varaqlar o'chadi. Davom etasizmi?");
+            if (!ok) return;
           }
-        } catch (e) { window.name = ''; }
+        } catch (e) {}
+        window.name = '';
         window.location.href = data.url;
       } catch (e) {
         isSavingOrAuthenticating = false;
@@ -506,7 +511,8 @@
     async function initProjectFromUrl() {
       // Google'dan qaytgach: kirishdan oldingi slaydlarni tiklash (window.name darhol tozalanadi)
       try {
-        if (String(window.name || '').indexOf('ssdraft:') === 0) {
+        window.name = '';
+        if (false) {
           const d = JSON.parse(window.name.slice(8)); window.name = '';
           if (d && Array.isArray(d.slides) && d.slides.length) {
             currentProjectId = d.id || generateUUID();

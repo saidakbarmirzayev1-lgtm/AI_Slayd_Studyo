@@ -29,3 +29,8 @@
   - PDF: jadval/diagramma vektor chiziladi. HTML: SVG + slayd o'tish animatsiyasi.
   - AI: `GEN_SYSTEM`/`EDIT_SYSTEM` yangilandi; `{"op":"transition"}` va `meta.transition`.
 - **Sayt**: jadval/grafik guruhlari `ssSpec` saqlaydi (SERIALIZE_PROPS), PPTX eksportda PptxGenJS `addTable`/`addChart` (haqiqiy obyektlar), har slaydga `<p:transition>` yoziladi; o'tish loyiha faylida (project.json) saqlanadi va tiklanadi.
+
+## v49 — sayt: hech narsa saqlanmaydi
+- Sayt slaydlarni brauzerda ham (IndexedDB), window.name orqali ham saqlamaydi: sahifa yangilansa yoki Google'dan qaytsa — hammasi 0 dan. Eski saqlangani ham o'chiriladi.
+- Chap panel eng pastida «Hamma varaqni tozalash» tugmasi (ogohlantirish bilan).
+- «Google bilan kirish» bosilganda hozir ish bo'lsa — «hammasi o'chadi» ogohlantirishi chiqadi; ish bo'lmasa — chiqmaydi.

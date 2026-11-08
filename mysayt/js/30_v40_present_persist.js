@@ -225,6 +225,7 @@
   var armedAt = Date.now() + 8000;   // ishga tushgandan keyin 8 soniya saqlanmaydi (tiklash tugashi uchun)
   async function persistNow(force) {
     // v48: faqat OXIRGI loyiha saqlanadi (bitta kalit 'current'); «Rasmni tozalash» bosilganda yangisi eskisini almashtiradi
+    return;                                   // v49: sayt hech narsani saqlamaydi — har safar 0 dan
     if (saving || typeof indexedDB === 'undefined') return;
     if (!window.__ssRestoreChecked || Date.now() < armedAt) return;
     if (!slides || !slides.length) return;
@@ -255,11 +256,8 @@
   window.ssLoadSavedProject = async function () {
     // v48: oxirgi saqlangan loyiha tiklanadi (faqat bitta). Xato bo'lsa — toza yangi loyiha.
     window.__ssRestoreChecked = true;
-    try {
-      if (typeof indexedDB === 'undefined') return null;
-      var r = await pTimeoutP(idbGet(), 4000);
-      return (r && Array.isArray(r.slides) && r.slides.length) ? r : null;
-    } catch (e) { return null; }
+    try { if (typeof indexedDB !== 'undefined') await pTimeoutP(idbDel(), 3000); } catch (e) {}   // v49: eski saqlanganini ham o'chiramiz
+    return null;
   };
   function pTimeoutP(p, ms) { return Promise.race([p, new Promise(function (r) { setTimeout(function () { r(null); }, ms); })]); }
 

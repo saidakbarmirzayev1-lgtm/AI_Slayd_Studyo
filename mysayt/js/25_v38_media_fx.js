@@ -280,6 +280,14 @@
       scroll.appendChild(addBtn);
       sidebar.appendChild(scroll);
     }
+    // v49: eng pastda «Hamma varaqni tozalash» (bitta bosish — hammasi 0 dan, ogohlantirish bilan)
+    let clrBtn = scroll.querySelector(':scope > .btn-reset-canvas');
+    if (!clrBtn) {
+      clrBtn = document.createElement('div');
+      clrBtn.className = 'btn-reset-canvas';
+      clrBtn.onclick = function (e) { e.stopPropagation(); if (window.ssResetCanvas) window.ssResetCanvas(); };
+      clrBtn.innerHTML = '<span class="material-symbols-outlined">delete_sweep</span> Hamma varaqni tozalash';
+    }
     const activeScrollTop = scroll.scrollTop;
     window._liveThumbGifCount = scroll.querySelectorAll('.thumb-gif-item, .slide-thumb-bg-gif').length;
 
@@ -316,8 +324,8 @@
       if (el === ref) ref = ref.nextSibling;
       else scroll.insertBefore(el, ref);
     });
-    Array.from(scroll.children).forEach(function (n) { if (n !== addBtn && want.indexOf(n) < 0) n.remove(); });
-    if (scroll.lastChild !== addBtn) scroll.appendChild(addBtn);
+    Array.from(scroll.children).forEach(function (n) { if (n !== addBtn && n !== clrBtn && want.indexOf(n) < 0 && n.id !== 'ssAdSlot') n.remove(); });
+    if (addBtn.nextSibling !== clrBtn || scroll.lastChild !== clrBtn) { scroll.appendChild(addBtn); scroll.appendChild(clrBtn); }
 
     if (!sidebar.querySelector(':scope > .sidebar-user-section')) safe(function () { renderSidebarUserProfile(sidebar); });
     if (activeScrollTop > 0) scroll.scrollTop = activeScrollTop;

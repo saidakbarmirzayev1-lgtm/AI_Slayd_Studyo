@@ -64,14 +64,21 @@
   // 2) «Rasmni tozalash» — hammasi birinchi holatga
   // ---------------------------------------------------------------------------------------------
   async function confirmReset() {
-    var msg = "Barcha slaydlar, rasm va matnlar tozalanib, birinchi (boshlang'ich) holatga qaytadi. Ctrl+Z bilan qaytarish mumkin.";
+    var msg = "Hamma varaq, rasm va matnlar o'chib, hammasi 0 dan boshlanadi. Ctrl+Z bilan qaytarish mumkin.";
     if (window.Swal && Swal.fire) {
-      var r = await Swal.fire({ title: 'Rasmni tozalaysizmi?', text: msg, icon: 'warning', showCancelButton: true, confirmButtonText: 'Ha, tozalash', cancelButtonText: 'Bekor qilish', confirmButtonColor: '#d93025', reverseButtons: true });
+      var r = await Swal.fire({ title: 'Hamma varaq tozalansinmi?', text: msg, icon: 'warning', showCancelButton: true, confirmButtonText: 'Ha, tozalash', cancelButtonText: 'Bekor qilish', confirmButtonColor: '#d93025', reverseButtons: true });
       return !!(r && r.isConfirmed);
     }
-    return window.confirm('Rasmni tozalaysizmi?\n' + msg);
+    return window.confirm('Hamma varaq tozalansinmi?\n' + msg);
   }
 
+  /* v49: «ish bormi?» — Google'ga kirishdan oldin ogohlantirish uchun */
+  function workSig() { try { return (slides || []).map(function (s) { return s.json; }).join('|').length + ':' + (slides || []).length; } catch (e) { return ''; } }
+  var baseSig = null;
+  setTimeout(function () { try { saveCurrentSlideState(); } catch (e) {} baseSig = workSig(); }, 3500);
+  window.ssHasWork = function () {
+    try { if (slides && slides.length > 1) return true; try { saveCurrentSlideState(); } catch (e) {} return baseSig !== null && workSig() !== baseSig; } catch (e) { return false; }
+  };
   var resetting = false;
   window.ssResetCanvas = async function () {
     if (resetting) return;
@@ -93,6 +100,7 @@
       addSlide('title');                                       // boshlang'ich holat (tarixga yoziladi)
       try { updateAllImageBadges(); } catch (e) {}
       try { hasUnsavedChanges = false; } catch (e) {}
+      setTimeout(function () { try { saveCurrentSlideState(); baseSig = workSig(); } catch (e) {} }, 600);
       toast('Tozalandi — birinchi holatga qaytdi');
     } catch (e) {
       console.warn('[v46] tozalash:', e);
