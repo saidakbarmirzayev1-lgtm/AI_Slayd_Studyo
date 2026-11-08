@@ -15,6 +15,7 @@ import html as _html
 import io
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -26,7 +27,9 @@ LH = 1.22                                   # qator balandligi (o'lcham ko'paytm
 FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 SYS_FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
-LAYOUTS = ("title", "bullets", "cards", "stats", "quote", "closing")
+LAYOUTS = ("title", "bullets", "cards", "stats", "quote", "closing", "table", "chart")
+TRANSITIONS = ("fade", "zoom", "flip", "up", "blur", "none")      # sayt bilan bir xil nomlar
+CHART_KINDS = ("bar", "line", "pie", "doughnut")
 
 THEMES: Dict[str, Dict[str, str]] = {
     #            qora/to'q   asosiy      urg'u       fon        matn       xira       kartochka   och ton
@@ -203,6 +206,23 @@ def extract_json(text: str) -> Optional[dict]:
     return None
 
 
+def _num(v: Any) -> float:
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.search(r"-?\d[\d\s,.]*", str(v or ""))
+    if not m:
+        return 0.0
+    t = m.group(0).replace(" ", "")
+    if t.count(",") == 1 and t.count(".") == 0:
+        t = t.replace(",", ".")
+    else:
+        t = t.replace(",", "")
+    try:
+        return float(t)
+    except ValueError:
+        return 0.0
+
+
 def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else []
 
@@ -213,7 +233,13 @@ def normalize_slide(s: Any) -> Optional[dict]:
     lay = str(s.get("layout") or "").strip().lower()
     if lay not in LAYOUTS:
         lay = "bullets" if (s.get("bullets") or s.get("points")) else ("cards" if s.get("cards") else "")
+    if lay == "" and s.get("rows"):
+        lay = "table"
+    if lay == "" and (s.get("labels") or s.get("series") or s.get("values")):
+        lay = "chart"
     out: Dict[str, Any] = {"layout": lay, "notes": clean(s.get("notes"), 400), "image": clean(s.get("image"), 80)}
+    tr = str(s.get("transition") or "").strip().lower()
+    out["transition"] = tr if tr in TRANSITIONS else ""
     title = clean(s.get("title"), 90)
     if lay in ("title", "closing"):
         out.update(title=title or "…", subtitle=clean(s.get("subtitle"), 140))
@@ -249,6 +275,52 @@ def normalize_slide(s: Any) -> Optional[dict]:
             return None
         out.update(title=title, stats=stats)
         out["image"] = ""
+    elif lay == "table":
+        rows = []
+        for r in _as_list(s.get("rows") or s.get("table")):
+            if isinstance(r, dict):
+                r = list(r.values())
+            if isinstance(r, list):
+                cells = [clean(c, 60) for c in r][:6]
+                if any(cells):
+                    rows.append(cells)
+        rows = rows[:9]
+        if len(rows) < 2:
+            return None
+        cols = max(len(r) for r in rows)
+        rows = [r + [""] * (cols - len(r)) for r in rows]
+        out.update(title=title, rows=rows)
+        out["image"] = ""
+    elif lay == "chart":
+        kind = str(s.get("chart") or s.get("kind") or s.get("type") or "bar").strip().lower()
+        if kind in ("column", "columns", "histogram"):
+            kind = "bar"
+        if kind in ("donut",):
+            kind = "doughnut"
+        if kind not in CHART_KINDS:
+            kind = "bar"
+        labels = [clean(x, 24) for x in _as_list(s.get("labels") or s.get("categories"))][:10]
+        series = []
+        for sr in _as_list(s.get("series")):
+            if isinstance(sr, dict):
+                vals = [_num(v) for v in _as_list(sr.get("values"))][:10]
+                if vals:
+                    series.append({"name": clean(sr.get("name"), 30), "values": vals})
+        if not series and s.get("values"):
+            series = [{"name": "", "values": [_num(v) for v in _as_list(s.get("values"))][:10]}]
+        series = series[:3]
+        if not series or not labels:
+            return None
+        n = min(len(labels), max(len(sr["values"]) for sr in series))
+        if n < 2:
+            return None
+        labels = labels[:n]
+        for sr in series:
+            sr["values"] = (sr["values"] + [0.0] * n)[:n]
+        if kind in ("pie", "doughnut"):
+            series = series[:1]
+        out.update(title=title, chart=kind, labels=labels, series=series)
+        out["image"] = ""
     elif lay == "quote":
         q = clean(s.get("text") or s.get("quote"), 220)
         if not q:
@@ -275,14 +347,16 @@ def normalize_deck(raw: Any, n: int, topic: str = "") -> Optional[dict]:
     if theme not in THEMES:
         theme = DEFAULT_THEME
     if slides[0]["layout"] != "title":
-        slides.insert(0, {"layout": "title", "title": title, "subtitle": clean(raw.get("subtitle"), 140), "notes": "", "image": ""})
+        slides.insert(0, {"layout": "title", "title": title, "subtitle": clean(raw.get("subtitle"), 140), "notes": "", "image": "", "transition": ""})
     n = max(1, int(n or len(slides)))
     if len(slides) > n:
         closing = next((s for s in reversed(slides) if s["layout"] == "closing"), None)
         slides = slides[:n]
         if closing is not None and n >= 3 and slides[-1]["layout"] != "closing":
             slides[-1] = closing
-    return {"title": title, "subtitle": clean(raw.get("subtitle"), 140), "theme": theme, "slides": slides}
+    dtr = str(raw.get("transition") or "").strip().lower()
+    return {"title": title, "subtitle": clean(raw.get("subtitle"), 140), "theme": theme, "slides": slides,
+            "transition": dtr if dtr in TRANSITIONS else ""}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -321,6 +395,13 @@ class Scene:
         self.bg = bg
         self.items: List[dict] = []
         self.notes = ""
+        self.transition = "fade"
+
+    def table(self, x, y, w, h, rows, colw, rowh, fs, th):
+        self.items.append(dict(t="table", x=x, y=y, w=w, h=h, rows=rows, colw=colw, rowh=rowh, fs=fs, th=th))
+
+    def chart(self, x, y, w, h, kind, labels, series, th):
+        self.items.append(dict(t="chart", x=x, y=y, w=w, h=h, kind=kind, labels=labels, series=series, th=th))
 
     def rect(self, x, y, w, h, fill, r=0, line=None, lw=1):
         self.items.append(dict(t="rect", x=x, y=y, w=w, h=h, fill=fill, r=r, line=line, lw=lw))
@@ -337,6 +418,183 @@ class Scene:
             lines = wrap(text, size, w, bold, italic)
         self.items.append(dict(t="text", x=x, y=y, w=w, h=h, text=text, size=size, color=color, bold=bold, italic=italic,
                                align=align, anchor=anchor, lines=lines))
+
+
+def _layout_table(sc: Scene, th: dict, rows: List[List[str]]) -> None:
+    """Jadval o'lchamlarini hisoblaydi (ustun kengligi matn uzunligiga qarab, shrift sig'ishiga qarab)."""
+    cols = len(rows[0])
+    X, Y, TW, MAXH = 56, 152, 848, 330
+    weights = []
+    for ci in range(cols):
+        mx = max(len(r[ci]) for r in rows)
+        weights.append(min(30, max(6, mx)))
+    tot = float(sum(weights))
+    colw = [TW * w / tot for w in weights]
+    colw = [max(70.0, c) for c in colw]
+    k = TW / sum(colw)
+    colw = [c * k for c in colw]
+    pick = None
+    for fs in range(22, 10, -1):
+        rh = []
+        for ri, r in enumerate(rows):
+            n = max(len(wrap(c or " ", fs, colw[ci] - 20, bold=(ri == 0))) for ci, c in enumerate(r))
+            rh.append(n * fs * LH + 16)
+        if sum(rh) <= MAXH:
+            pick = (fs, rh)
+            break
+    if pick is None:
+        fs = 11
+        pick = (fs, [max(len(wrap(c or " ", fs, colw[ci] - 20)) for ci, c in enumerate(r)) * fs * LH + 12 for r in rows])
+    fs, rh = pick
+    sc.table(X, Y, TW, sum(rh), rows, colw, rh, fs, th)
+
+
+def series_colors(th: dict, n: int) -> List[str]:
+    base = [th["primary"], th["accent"], mix(th["primary"], "#FFFFFF", 0.45), mix(th["accent"], th["dark"], 0.4),
+            mix(th["primary"], th["accent"], 0.5), mix(th["dark"], "#FFFFFF", 0.35), mix(th["accent"], "#FFFFFF", 0.5),
+            mix(th["primary"], th["dark"], 0.5), mix(th["tint"], th["primary"], 0.6), mix(th["muted"], "#FFFFFF", 0.4)]
+    return [base[i % len(base)] for i in range(n)]
+
+
+def _fmt_num(v: float) -> str:
+    if abs(v - round(v)) < 1e-9:
+        return f"{int(round(v)):,}".replace(",", " ")
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def _short(text: str, size: float, width: float, bold: bool = False) -> str:
+    if text_w(text, size, bold) <= width:
+        return text
+    while text and text_w(text + "…", size, bold) > width:
+        text = text[:-1]
+    return (text + "…") if text else ""
+
+
+def expand_item(it: dict) -> List[dict]:
+    """table / chart ni oddiy chizma elementlariga (rect, text, line, poly, wedge) ajratadi — PDF va HTML uchun."""
+    t = it["t"]
+    if t == "table":
+        tmp = Scene("#FFFFFF")
+        th = it["th"]
+        x0, y = it["x"], it["y"]
+        fs = it["fs"]
+        for ri, r in enumerate(it["rows"]):
+            rh = it["rowh"][ri]
+            x = x0
+            for ci, cell in enumerate(r):
+                cw = it["colw"][ci]
+                if ri == 0:
+                    fill = th["primary"]
+                elif ri % 2 == 0:
+                    fill = th["tint"]
+                else:
+                    fill = th["card"]
+                tmp.rect(x, y, cw, rh, fill, line=mix(th["tint"], th["primary"], 0.25), lw=1)
+                col = "#FFFFFF" if ri == 0 else th["text"]
+                lines = wrap(cell or " ", fs, cw - 20, bold=(ri == 0))
+                if cell:
+                    tmp.text(x + 10, y, cw - 20, rh, cell, fs, col, bold=(ri == 0), align=("l" if ci == 0 else "c"), anchor="m", lines=lines)
+                x += cw
+            y += rh
+        return tmp.items
+    if t == "chart":
+        return _chart_items(it)
+    return [it]
+
+
+def _chart_items(it: dict) -> List[dict]:
+    th = it["th"]
+    X, Y, CW, CH = it["x"], it["y"], it["w"], it["h"]
+    kind, labels, series = it["kind"], it["labels"], it["series"]
+    n = len(labels)
+    tmp = Scene("#FFFFFF")
+    if kind in ("pie", "doughnut"):
+        vals = [max(0.0, v) for v in series[0]["values"]]
+        tot = sum(vals) or 1.0
+        cols = series_colors(th, n)
+        r = min(CH / 2 - 8, 150)
+        cx, cy = X + r + 30, Y + CH / 2
+        a = 0.0
+        for v, c in zip(vals, cols):
+            ext = 360.0 * v / tot
+            if ext > 0.05:
+                tmp.items.append(dict(t="wedge", cx=cx, cy=cy, r=r, a0=a, a1=a + ext, fill=c))
+            a += ext
+        if kind == "doughnut":
+            tmp.oval(cx - r * 0.55, cy - r * 0.55, r * 1.1, r * 1.1, th["bg"])
+        lx, ly = cx + r + 60, Y + max(0.0, (CH - n * 34) / 2)
+        for lab, v, c in zip(labels, vals, cols):
+            tmp.rect(lx, ly + 6, 18, 18, c, r=4)
+            pct = f"{100.0 * v / tot:.0f}%"
+            txt = _short(f"{lab}", 20, X + CW - lx - 130)
+            tmp.text(lx + 28, ly, X + CW - lx - 120, 30, txt, 20, th["text"], anchor="m", lines=[txt])
+            tmp.text(X + CW - 90, ly, 90, 30, pct, 20, th["primary"], bold=True, align="r", anchor="m", lines=[pct])
+            ly += 34
+        return tmp.items
+    # bar / line
+    allv = [v for sr in series for v in sr["values"]]
+    vmax = max(allv + [0.0])
+    vmin = min(allv + [0.0])
+    if vmax == vmin:
+        vmax = vmin + 1
+    span = vmax - vmin
+    # chiroyli qadam
+    step = 10 ** math.floor(math.log10(span / 4.0))
+    for m in (1, 2, 2.5, 5, 10):
+        if span / (step * m) <= 5:
+            step *= m
+            break
+    top = math.ceil(vmax / step) * step
+    bot = math.floor(vmin / step) * step if vmin < 0 else 0.0
+    gx0 = X + 70
+    gx1 = X + CW - 10
+    legend_h = 30 if len(series) > 1 else 0
+    gy0 = Y + 10 + legend_h
+    gy1 = Y + CH - 44
+    def py(v):
+        return gy1 - (v - bot) / (top - bot) * (gy1 - gy0)
+    gv = bot
+    guard = 0
+    while gv <= top + 1e-9 and guard < 20:
+        yy = py(gv)
+        tmp.items.append(dict(t="line", x1=gx0, y1=yy, x2=gx1, y2=yy, color=mix(th["tint"], th["muted"], 0.35), lw=1))
+        lab = _fmt_num(gv)
+        tmp.text(X, yy - 10, 62, 20, lab, 14, th["muted"], align="r", anchor="m", lines=[lab])
+        gv += step
+        guard += 1
+    cols = series_colors(th, len(series))
+    slot = (gx1 - gx0) / n
+    for ci, lab in enumerate(labels):
+        txt = _short(lab, 15, slot - 4)
+        tmp.text(gx0 + ci * slot, gy1 + 10, slot, 22, txt, 15, th["text"], align="c", anchor="m", lines=[txt])
+    if kind == "bar":
+        ns = len(series)
+        bw = min(70.0, (slot * 0.72) / ns)
+        for si, sr in enumerate(series):
+            for ci, v in enumerate(sr["values"]):
+                x = gx0 + ci * slot + (slot - bw * ns) / 2 + si * bw
+                y0, y1 = py(max(v, 0)), py(min(v, 0) if bot < 0 else bot)
+                hh = max(1.0, abs(y1 - y0))
+                tmp.rect(x, min(y0, y1), bw - 2, hh, cols[si], r=0)
+                lab = _fmt_num(v)
+                tmp.text(x - 10, min(y0, y1) - 22, bw + 18, 20, lab, 14, th["text"], bold=True, align="c", anchor="m", lines=[lab])
+    else:
+        for si, sr in enumerate(series):
+            pts = [(gx0 + ci * slot + slot / 2, py(v)) for ci, v in enumerate(sr["values"])]
+            tmp.items.append(dict(t="poly", pts=pts, color=cols[si], lw=3.5))
+            for (px, pyy), v in zip(pts, sr["values"]):
+                tmp.oval(px - 6, pyy - 6, 12, 12, cols[si])
+                lab = _fmt_num(v)
+                tmp.text(px - 40, pyy - 28, 80, 20, lab, 14, th["text"], bold=True, align="c", anchor="m", lines=[lab])
+    if len(series) > 1:
+        lx = gx0
+        for si, sr in enumerate(series):
+            nm = sr["name"] or f"#{si + 1}"
+            tmp.rect(lx, Y + 6, 16, 16, cols[si], r=3)
+            tmp.text(lx + 24, Y + 2, 200, 24, nm, 16, th["text"], anchor="m", lines=[_short(nm, 16, 190)])
+            lx += 40 + min(190, text_w(nm, 16)) + 20
+    return tmp.items
+
 
 
 def _footer(sc: Scene, th: dict, deck_title: str, idx: int, total: int):
@@ -484,6 +742,18 @@ def build_scenes(deck: dict, images: Optional[Dict[int, bytes]] = None, lang: st
                 if c["label"]:
                     sc.text(x + 20, y + 160, cw - 40, len(ll) * ls * LH, c["label"], ls, th["text"], lines=ll)
             _footer(sc, th, deck_title, idx, total)
+        elif lay == "table":
+            sc = Scene(th["bg"])
+            _topbar(sc, th)
+            _heading(sc, th, s["title"], 848)
+            _layout_table(sc, th, s["rows"])
+            _footer(sc, th, deck_title, idx, total)
+        elif lay == "chart":
+            sc = Scene(th["bg"])
+            _topbar(sc, th)
+            _heading(sc, th, s["title"], 848)
+            sc.chart(56, 150, 848, 335, s["chart"], s["labels"], s["series"], th)
+            _footer(sc, th, deck_title, idx, total)
         elif lay == "quote":
             sc = Scene(th["tint"])
             sc.rect(0, 0, 14, H, th["primary"])
@@ -500,6 +770,7 @@ def build_scenes(deck: dict, images: Optional[Dict[int, bytes]] = None, lang: st
         else:  # pragma: no cover
             sc = Scene(th["bg"])
         sc.notes = s.get("notes", "")
+        sc.transition = s.get("transition") or deck.get("transition") or "fade"
         scenes.append(sc)
     return scenes
 
@@ -507,6 +778,16 @@ def build_scenes(deck: dict, images: Optional[Dict[int, bytes]] = None, lang: st
 # ---------------------------------------------------------------------------------------------
 # PDF
 # ---------------------------------------------------------------------------------------------
+def _flat(items: List[dict]) -> List[dict]:
+    out: List[dict] = []
+    for it in items:
+        if it["t"] in ("table", "chart"):
+            out.extend(expand_item(it))
+        else:
+            out.append(it)
+    return out
+
+
 def render_pdf(scenes: List[Scene], title: str) -> bytes:
     from reportlab.lib.colors import HexColor
     from reportlab.lib.utils import ImageReader
@@ -519,9 +800,28 @@ def render_pdf(scenes: List[Scene], title: str) -> bytes:
     for sc in scenes:
         c.setFillColor(HexColor(sc.bg))
         c.rect(0, 0, W, H, stroke=0, fill=1)
-        for it in sc.items:
+        for it in _flat(sc.items):
             t = it["t"]
-            if t in ("rect", "oval"):
+            if t == "line":
+                c.setStrokeColor(HexColor(it["color"]))
+                c.setLineWidth(it.get("lw", 1))
+                c.line(it["x1"], H - it["y1"], it["x2"], H - it["y2"])
+            elif t == "poly":
+                c.setStrokeColor(HexColor(it["color"]))
+                c.setLineWidth(it.get("lw", 2))
+                c.setLineJoin(1)
+                pp = c.beginPath()
+                for k, (px, py_) in enumerate(it["pts"]):
+                    (pp.moveTo if k == 0 else pp.lineTo)(px, H - py_)
+                c.drawPath(pp, stroke=1, fill=0)
+            elif t == "wedge":
+                c.setFillColor(HexColor(it["fill"]))
+                c.setStrokeColor(HexColor("#FFFFFF"))
+                c.setLineWidth(1.5)
+                cx, cy, r = it["cx"], H - it["cy"], it["r"]
+                # bizda burchak: 12:00 dan soat yo'nalishida; reportlab: 3:00 dan soatga teskari
+                c.wedge(cx - r, cy - r, cx + r, cy + r, 90 - it["a0"], -(it["a1"] - it["a0"]), stroke=1, fill=1)
+            elif t in ("rect", "oval"):
                 x, w, h = it["x"], it["w"], it["h"]
                 y = H - it["y"] - h
                 c.setFillColor(HexColor(it["fill"]))
@@ -573,6 +873,161 @@ def render_pdf(scenes: List[Scene], title: str) -> bytes:
 # ---------------------------------------------------------------------------------------------
 # PPTX
 # ---------------------------------------------------------------------------------------------
+_TR_XML = {
+    "fade": '<p:fade/>',
+    "zoom": '<p:zoom dir="in"/>',
+    "flip": '<p:cover dir="r"/>',
+    "up": '<p:push dir="u"/>',
+    "blur": '<p:dissolve/>',
+}
+
+
+def _pptx_transition(slide, name: str) -> None:
+    """Slayd o'tishini PowerPoint'ning o'z <p:transition> elementi bilan yozadi."""
+    xml = _TR_XML.get(name or "")
+    if not xml:
+        return
+    from lxml import etree
+    from pptx.oxml.ns import qn
+    ns = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+    el = etree.fromstring(f'<p:transition {ns} spd="med">{xml}</p:transition>')
+    sld = slide._element
+    for old in sld.findall(qn("p:transition")):
+        sld.remove(old)
+    anchor = sld.find(qn("p:clrMapOvr"))
+    if anchor is None:
+        anchor = sld.find(qn("p:cSld"))
+    anchor.addnext(el)
+
+
+def _pptx_table(slide, it: dict, E: int, rgb) -> None:
+    from pptx.util import Emu, Pt
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.oxml.ns import qn
+    th = it["th"]
+    rows = it["rows"]
+    gf = slide.shapes.add_table(len(rows), len(rows[0]), Emu(int(it["x"] * E)), Emu(int(it["y"] * E)),
+                                Emu(int(it["w"] * E)), Emu(int(sum(it["rowh"]) * E)))
+    tbl = gf.table
+    try:                                                   # standart uslub chiziqlarini o'chirish
+        tp = tbl._tbl.tblPr
+        for a in ("bandRow", "firstRow"):
+            tp.set(a, "0")
+        sid = tp.find(qn("a:tableStyleId"))
+        if sid is not None:
+            sid.text = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"          # No Style, No Grid
+    except Exception:
+        pass
+    for ci, cw in enumerate(it["colw"]):
+        tbl.columns[ci].width = Emu(int(cw * E))
+    for ri, r in enumerate(rows):
+        tbl.rows[ri].height = Emu(int(it["rowh"][ri] * E))
+        for ci, txt in enumerate(r):
+            cell = tbl.cell(ri, ci)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = rgb(th["primary"] if ri == 0 else (th["tint"] if ri % 2 == 0 else th["card"]))
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.margin_left = cell.margin_right = Emu(10 * E)
+            cell.margin_top = cell.margin_bottom = Emu(4 * E)
+            tf = cell.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.alignment = PP_ALIGN.LEFT if ci == 0 else PP_ALIGN.CENTER
+            run = p.add_run()
+            run.text = txt
+            run.font.size = Pt(it["fs"])
+            run.font.bold = ri == 0
+            run.font.name = "Arial"
+            run.font.color.rgb = rgb("#FFFFFF" if ri == 0 else th["text"])
+            # hujayra chegarasi
+            tcPr = cell._tc.get_or_add_tcPr()
+            from lxml import etree
+            for side in ("lnL", "lnR", "lnT", "lnB"):
+                ln = etree.SubElement(tcPr, qn("a:" + side), w="12700")
+                sf = etree.SubElement(ln, qn("a:solidFill"))
+                etree.SubElement(sf, qn("a:srgbClr"), val=mix(th["tint"], th["primary"], 0.25).lstrip("#").upper())
+            # a:lnX elementlari fill'dan OLDIN turishi kerak
+            fills = [e for e in tcPr if e.tag in (qn("a:solidFill"), qn("a:noFill"))]
+            for fe in fills:
+                tcPr.remove(fe)
+                tcPr.append(fe)
+
+
+def _pptx_chart(slide, it: dict, E: int, rgb) -> None:
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_LABEL_POSITION
+    from pptx.util import Emu, Pt
+    th = it["th"]
+    kind = it["kind"]
+    cd = CategoryChartData()
+    cd.categories = it["labels"]
+    for k, sr in enumerate(it["series"]):
+        cd.add_series(sr["name"] or f"#{k + 1}", sr["values"])
+    ct = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED, "line": XL_CHART_TYPE.LINE_MARKERS,
+          "pie": XL_CHART_TYPE.PIE, "doughnut": XL_CHART_TYPE.DOUGHNUT}[kind]
+    gf = slide.shapes.add_chart(ct, Emu(int(it["x"] * E)), Emu(int(it["y"] * E)), Emu(int(it["w"] * E)), Emu(int(it["h"] * E)), cd)
+    ch = gf.chart
+    ch.has_title = False
+    ch.font.size = Pt(14)
+    ch.font.name = "Arial"
+    ch.font.color.rgb = rgb(th["text"])
+    cols = series_colors(th, len(it["labels"]) if kind in ("pie", "doughnut") else len(it["series"]))
+    plot = ch.plots[0]
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.font.size = Pt(14)
+    dl.font.bold = True
+    if kind in ("pie", "doughnut"):
+        ch.has_legend = True
+        ch.legend.position = XL_LEGEND_POSITION.RIGHT
+        ch.legend.include_in_layout = False
+        ch.legend.font.size = Pt(16)
+        dl.show_percentage = True
+        dl.show_value = False
+        dl.number_format = "0%"
+        dl.number_format_is_linked = False
+        ser = plot.series[0]
+        for pi, c in enumerate(cols):
+            pt = ser.points[pi]
+            pt.format.fill.solid()
+            pt.format.fill.fore_color.rgb = rgb(c)
+        if kind == "pie":
+            dl.font.color.rgb = rgb("#FFFFFF")
+    else:
+        ch.has_legend = len(it["series"]) > 1
+        if ch.has_legend:
+            ch.legend.position = XL_LEGEND_POSITION.TOP
+            ch.legend.include_in_layout = False
+        dl.show_value = True
+        try:
+            dl.position = XL_LABEL_POSITION.OUTSIDE_END if kind == "bar" else XL_LABEL_POSITION.ABOVE
+        except Exception:
+            pass
+        for k, ser in enumerate(plot.series):
+            if kind == "bar":
+                ser.format.fill.solid()
+                ser.format.fill.fore_color.rgb = rgb(cols[k])
+            else:
+                ser.format.line.color.rgb = rgb(cols[k])
+                ser.format.line.width = Pt(3.5)
+                ser.smooth = False
+                ser.marker.format.fill.solid()
+                ser.marker.format.fill.fore_color.rgb = rgb(cols[k])
+                ser.marker.format.line.color.rgb = rgb(cols[k])
+        if kind == "bar":
+            plot.gap_width = 60
+        va = ch.value_axis
+        va.major_gridlines.format.line.color.rgb = rgb(mix(th["tint"], th["muted"], 0.35))
+        va.format.line.fill.background()
+        va.tick_labels.font.size = Pt(14)
+        ch.category_axis.tick_labels.font.size = Pt(15)
+        try:
+            from pptx.enum.chart import XL_TICK_LABEL_POSITION
+            ch.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+        except Exception:
+            pass
+
+
 def render_pptx(scenes: List[Scene], title: str) -> bytes:
     from pptx import Presentation
     from pptx.dml.color import RGBColor
@@ -624,6 +1079,10 @@ def render_pptx(scenes: List[Scene], title: str) -> bytes:
                         shp._element.remove(st_el)
                 except Exception:
                     pass
+            elif t == "table":
+                _pptx_table(slide, it, E, rgb)
+            elif t == "chart":
+                _pptx_chart(slide, it, E, rgb)
             elif t == "img":
                 pic = slide.shapes.add_picture(io.BytesIO(it["data"]), Emu(x), Emu(y), Emu(w), Emu(h))
                 if it.get("r"):
@@ -657,6 +1116,7 @@ def render_pptx(scenes: List[Scene], title: str) -> bytes:
                 r.font.italic = bool(it["italic"])
                 r.font.name = "Arial"
                 r.font.color.rgb = rgb(it["color"])
+        _pptx_transition(slide, getattr(sc, "transition", "fade"))
         if sc.notes:
             try:
                 slide.notes_slide.notes_text_frame.text = sc.notes
@@ -681,6 +1141,17 @@ html,body{{width:100%;height:100%;background:#0b0f19;overflow:hidden;font-family
 #stage{{position:relative;width:960px;height:540px;transform-origin:center center;flex:none}}
 .slide{{position:absolute;inset:0;width:960px;height:540px;overflow:hidden;opacity:0;visibility:hidden;transition:opacity .35s ease}}
 .slide.on{{opacity:1;visibility:visible}}
+@keyframes trFade{{from{{opacity:0}}to{{opacity:1}}}}
+@keyframes trZoom{{from{{opacity:0;transform:scale(.86)}}to{{opacity:1;transform:scale(1)}}}}
+@keyframes trFlip{{from{{opacity:0;transform:perspective(900px) rotateY(80deg)}}to{{opacity:1;transform:perspective(900px) rotateY(0)}}}}
+@keyframes trUp{{from{{opacity:0;transform:translateY(48px)}}to{{opacity:1;transform:translateY(0)}}}}
+@keyframes trBlur{{from{{opacity:0;filter:blur(14px)}}to{{opacity:1;filter:blur(0)}}}}
+.slide.on.tr-fade{{animation:trFade .6s ease both}}
+.slide.on.tr-zoom{{animation:trZoom .55s cubic-bezier(.22,.61,.36,1) both}}
+.slide.on.tr-flip{{animation:trFlip .7s cubic-bezier(.22,.61,.36,1) both}}
+.slide.on.tr-up{{animation:trUp .5s cubic-bezier(.22,.61,.36,1) both}}
+.slide.on.tr-blur{{animation:trBlur .6s ease both}}
+.slide>svg{{position:absolute}}
 .slide>*{{position:absolute}}
 .t{{display:flex;flex-direction:column;overflow:visible}}
 .t>div{{width:100%}}
@@ -735,9 +1206,28 @@ def render_html(scenes: List[Scene], title: str, lang: str = "uz") -> bytes:
     e = _html.escape
     out = [_HTML_HEAD.format(title=e(title or "Taqdimot"), lang=e(lang or "uz"))]
     for sc in scenes:
-        out.append(f'<section class="slide" style="background:{sc.bg}">')
-        for it in sc.items:
+        tr = getattr(sc, "transition", "fade") or "fade"
+        out.append(f'<section class="slide tr-{e(tr)}" style="background:{sc.bg}">')
+        sec_at = len(out) - 1
+        svg: List[str] = []
+        for it in _flat(sc.items):
             t = it["t"]
+            if t in ("line", "poly", "wedge"):
+                if t == "line":
+                    svg.append(f'<line x1="{it["x1"]:.1f}" y1="{it["y1"]:.1f}" x2="{it["x2"]:.1f}" y2="{it["y2"]:.1f}" stroke="{it["color"]}" stroke-width="{it.get("lw", 1)}"/>')
+                elif t == "poly":
+                    pts = " ".join(f"{a:.1f},{b:.1f}" for a, b in it["pts"])
+                    svg.append(f'<polyline points="{pts}" fill="none" stroke="{it["color"]}" stroke-width="{it.get("lw", 2)}" stroke-linejoin="round" stroke-linecap="round"/>')
+                else:
+                    a0, a1 = math.radians(it["a0"] - 90), math.radians(it["a1"] - 90)
+                    r, cx, cy = it["r"], it["cx"], it["cy"]
+                    x0, y0, x1, y1 = cx + r * math.cos(a0), cy + r * math.sin(a0), cx + r * math.cos(a1), cy + r * math.sin(a1)
+                    large = 1 if (it["a1"] - it["a0"]) > 180 else 0
+                    if it["a1"] - it["a0"] >= 359.9:
+                        svg.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" fill="{it["fill"]}"/>')
+                    else:
+                        svg.append(f'<path d="M{cx:.1f} {cy:.1f} L{x0:.1f} {y0:.1f} A{r:.1f} {r:.1f} 0 {large} 1 {x1:.1f} {y1:.1f} Z" fill="{it["fill"]}" stroke="#fff" stroke-width="1.5"/>')
+                continue
             pos = f'left:{it["x"]:.1f}px;top:{it["y"]:.1f}px;width:{it["w"]:.1f}px;height:{it["h"]:.1f}px;'
             if t == "rect":
                 st = pos + f'background:{it["fill"]};'
@@ -759,6 +1249,8 @@ def render_html(scenes: List[Scene], title: str, lang: str = "uz") -> bytes:
                 if it["italic"]:
                     st += "font-style:italic;"
                 out.append(f'<div class="t" style="{st}"><div>{e(it["text"])}</div></div>')
+        if svg:                                              # chiziq/sektorlar eng pastda, matn va nuqtalar ustida
+            out.insert(sec_at + 1, '<svg width="960" height="540" viewBox="0 0 960 540" style="position:absolute;left:0;top:0;pointer-events:none">' + "".join(svg) + "</svg>")
         out.append("</section>")
     out.append(_HTML_TAIL)
     return "".join(out).encode("utf-8")

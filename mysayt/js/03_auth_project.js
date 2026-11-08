@@ -454,7 +454,7 @@
         try {
           if (typeof slides !== 'undefined' && slides.length) {
             saveCurrentSlideState();
-            window.name = 'ssdraft:' + JSON.stringify({ id: currentProjectId, title: projectTitle, slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [] }; }) });
+            window.name = 'ssdraft:' + JSON.stringify({ id: currentProjectId, title: projectTitle, slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; }) });
           }
         } catch (e) { window.name = ''; }
         window.location.href = data.url;
@@ -513,7 +513,7 @@
             
             projectTitle = d.title || projectTitle;
             const te = document.getElementById('presentationTitle'); if (te) te.innerText = projectTitle;
-            slides = d.slides.map(function (s) { return { json: s.json || '{}', thumb: '', imageNumbers: s.imageNumbers || [] }; });
+            slides = d.slides.map(function (s) { return { json: s.json || '{}', thumb: '', imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; });
             activeIndex = 0;
             bumpObjectIdCounterFromSlides();
             renderSidebar();

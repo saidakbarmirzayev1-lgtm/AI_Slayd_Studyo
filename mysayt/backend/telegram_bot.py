@@ -1016,6 +1016,8 @@ SLIDE TYPES (field "layout"):
 - {"layout":"bullets","title":"","bullets":["3-5 items, each max 110 chars"],"image":"english photo query or empty","notes":""}
 - {"layout":"cards","title":"","cards":[{"heading":"max 30 chars","text":"max 110 chars"}, ... 2 to 4 cards]}
 - {"layout":"stats","title":"","stats":[{"value":"72%","label":"what it means"}, ... 2 to 4 items]}
+- {"layout":"table","title":"","rows":[["Header 1","Header 2","Header 3"],["cell","cell","cell"], ... 3 to 8 rows, 2 to 5 columns, each cell max 40 chars]}   — first row = header; use for comparisons, schedules, prices, specs
+- {"layout":"chart","title":"","chart":"bar | line | pie | doughnut","labels":["A","B","C"],"series":[{"name":"2025","values":[10,20,30]}]}   — 2 to 8 labels, numbers only; pie/doughnut use ONE series; use for trends, shares, comparisons
 - {"layout":"quote","text":"","author":""}                                                          — only a REAL, well-known quote with the correct author
 - {"layout":"closing","title":"Thank you / key takeaway","subtitle":""}                                — ALWAYS the last slide
 
@@ -1023,6 +1025,8 @@ RULES
 - Produce EXACTLY the requested number of slides: 1 title + (N-2) content slides + 1 closing.
 - Write all slide text in the language of the user's request. If it is Uzbek, use Latin script. If the language is unclear, use Uzbek.
 - Content must be concrete, accurate and useful: real facts, examples, steps — no filler, no repeated points. Never invent precise statistics; use a "stats" slide only for well-known figures, otherwise use "~" approximations or use "cards".
+- Use a "table" or "chart" slide when the topic has comparable data (N >= 6). Chart numbers must be real or clearly approximate ("~"), never invented precise statistics. If the user asks for a table, chart, diagram, graph or statistics, ALWAYS include it.
+- Slide transition (the way the whole slide appears): optional deck field "transition" and optional per-slide "transition": one of fade | zoom | flip | up | blur | none. Default "fade". Set it only if the user asks for a specific effect (e.g. "zoom"), for all slides via the deck field.
 - Vary layouts: never more than 2 identical content layouts in a row. Use at least one "cards" slide when N >= 6.
 - "image": a short ENGLISH search query (2-4 words) for a concrete photographable subject. Give it for the title slide and for at most 40% of the "bullets" slides, otherwise "". If the user does not want images set "images": false and every "image" to "".
 - "notes": 1-2 sentences of speaker notes (same language as the slides).
@@ -1040,12 +1044,14 @@ Decide the intent:
    {"op":"insert","after":5,"slide":{...}}                              — add a slide after slide 5 (never before the title slide)
    {"op":"delete","index":4}                                            — remove a slide (never the title slide)
    {"op":"move","index":6,"after":2}                                    — move slide 6 right after slide 2
-   {"op":"meta","title":"...","subtitle":"...","theme":"ocean|violet|forest|sunset|rose|slate|teal"}  — deck title / subtitle / colour (any subset of the fields)
+   {"op":"meta","title":"...","subtitle":"...","theme":"ocean|violet|forest|sunset|rose|slate|teal","transition":"fade|zoom|flip|up|blur|none"}  — deck title / subtitle / colour / slide transition for ALL slides (any subset of the fields)
+   {"op":"transition","index":3,"name":"zoom"}                           — slide transition (how that whole slide appears) of ONE slide
    For slide 1 use "replace" with layout "title" (that is how «sarlavhasini o'zgartir» works for the deck title: also send a "meta" op with the new title).
    Only if nearly EVERY slide must change (translate the whole deck, rewrite everything) you may return "deck" (the COMPLETE updated deck) instead of "ops".
 2) "new_topic" — the message is clearly a NEW presentation topic unrelated to the current deck.   Return {"intent":"new_topic"}
 3) "chat" — a question or small talk about the deck, not requesting a change.   Return {"intent":"chat","reply":"helpful answer, max 4 sentences"}
-SLIDE SCHEMA (field "layout"): title/closing: title, subtitle · bullets: title, bullets[3-5], image · cards: title, cards[{heading,text}] (2-4) · stats: title, stats[{value,label}] (2-4) · quote: text, author
+SLIDE SCHEMA (field "layout"): title/closing: title, subtitle · bullets: title, bullets[3-5], image · cards: title, cards[{heading,text}] (2-4) · stats: title, stats[{value,label}] (2-4) · quote: text, author · table: title, rows[[cells]] (first row = header, 2-8 rows, 2-5 columns) · chart: title, chart(bar|line|pie|doughnut), labels[], series[{name,values[]}]
+ - To add a table / chart / statistics use "insert" or "replace" with these layouts. Numbers must be real or approximate, never invented.
  - "image" is a short ENGLISH photo search query or "". Keep the language of the deck unless asked to translate. No emoji, no markdown symbols. Reply in the user's language.
 """
 
@@ -1097,6 +1103,7 @@ def _apply_ops(deck: dict, ops: Any) -> Tuple[Optional[dict], int]:
         return None, 0
     items: List[List[Any]] = [[i, dict(s)] for i, s in enumerate(deck["slides"], 1)]     # [asl_raqam, slayd]
     title, subtitle, theme = deck.get("title"), deck.get("subtitle"), deck.get("theme")
+    deck_tr = deck.get("transition") or ""
     changed, applied = 0, 0
 
     def pos(orig: int) -> int:
@@ -1156,12 +1163,24 @@ def _apply_ops(deck: dict, ops: Any) -> Tuple[Optional[dict], int]:
                 th = str(op.get("theme") or "").strip().lower()
                 if th in decks.THEMES:
                     theme = th
+                tr = str(op.get("transition") or "").strip().lower()
+                if tr in decks.TRANSITIONS:
+                    deck_tr = tr
+                    for it in items:
+                        it[1]["transition"] = ""
+                applied += 1
+            elif kind == "transition":
+                k = pos(int(op.get("index")))
+                nm = str(op.get("name") or "").strip().lower()
+                if k < 0 or nm not in decks.TRANSITIONS:
+                    continue
+                items[k][1]["transition"] = nm
                 applied += 1
         except (TypeError, ValueError):
             continue
     if not applied:
         return None, 0
-    raw = {"title": title, "subtitle": subtitle, "theme": theme, "slides": [it[1] for it in items]}
+    raw = {"title": title, "subtitle": subtitle, "theme": theme, "transition": deck_tr, "slides": [it[1] for it in items]}
     new_deck = decks.normalize_deck(raw, len(items) + 2, str(title or ""))
     return new_deck, changed
 

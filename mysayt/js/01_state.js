@@ -155,7 +155,7 @@
     let currentSat = 100;
     let currentVal = 100;
     let globalObjectIdCounter = 0;
-    const SERIALIZE_PROPS = ['id', 'imageNumber', 'imageHash', '_oid', 'src', 'crossOrigin', 'isGif', 'gifUrl', 'isFallback', 'isVideo', 'videoUrl', 'videoLoop', 'videoMuted', 'videoAutoplay'];
+    const SERIALIZE_PROPS = ['id', 'imageNumber', 'imageHash', '_oid', 'src', 'crossOrigin', 'isGif', 'gifUrl', 'isFallback', 'isVideo', 'videoUrl', 'videoLoop', 'videoMuted', 'videoAutoplay', 'ssKind', 'ssSpec'];
     function nextObjectId() { globalObjectIdCounter += 1; return globalObjectIdCounter; }
     function ensureObjectId(obj) {
       if (!obj) return null;

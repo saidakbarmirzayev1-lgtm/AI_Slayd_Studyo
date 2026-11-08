@@ -777,6 +777,72 @@
     return true;
   }
 
+  /* ---- v48: jadval / grafik — PowerPoint'ning o'z (tahrirlanadigan) jadval va diagrammasi ---- */
+  function hex6(c, dflt) { var p = parseColor(c); return p ? p.hex : dflt; }
+  function addTableEl(slide, el) {
+    var sp = el.ssSpec, rows = sp && sp.rows;
+    if (!rows || !rows.length) return false;
+    var sx = num(el.scaleX, 1) || 1, sy = num(el.scaleY, 1) || 1;
+    var w = Math.max(40, num(el.width, 400) * sx), h = Math.max(20, num(el.height, 100) * sy);
+    var b = placeBox(el, w, h);
+    var cols = rows[0].length, avg = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+    var fsPt = Math.max(6, Math.round((sp.fs || 16) * avg * 0.75 * 2) / 2);
+    var hFill = hex6(sp.headerFill, '1A73E8'), hCol = hex6(sp.headerColor, 'FFFFFF');
+    var border = { type: 'solid', pt: 0.75, color: 'DBE1EA' };
+    var data = rows.map(function (r, ri) {
+      var isH = sp.header !== false && ri === 0;
+      return r.map(function (c, ci) {
+        return { text: String(c), options: {
+          bold: isH, color: isH ? hCol : '1F2937', fontFace: 'Arial', fontSize: fsPt,
+          align: (ci === 0 && !isH) ? 'left' : 'center', valign: 'middle',
+          fill: { color: isH ? hFill : (sp.stripe !== false && ri % 2 === 0 ? 'F1F5F9' : 'FFFFFF') },
+          border: [border, border, border, border], margin: [0.03, 0.08, 0.03, 0.08]
+        } };
+      });
+    });
+    var cw = []; for (var i = 0; i < cols; i++) cw.push(r4(b.w / cols));
+    var rh = []; for (var j = 0; j < rows.length; j++) rh.push(r4(b.h / rows.length));
+    slide.addTable(data, { x: b.x, y: b.y, w: b.w, colW: cw, rowH: rh });
+    return true;
+  }
+  function addChartEl(pptx, slide, el) {
+    var sp = el.ssSpec;
+    if (!sp || !sp.labels || !sp.series || !sp.series.length) return false;
+    var sx = num(el.scaleX, 1) || 1, sy = num(el.scaleY, 1) || 1;
+    var w = Math.max(80, num(el.width, 500) * sx), h = Math.max(60, num(el.height, 300) * sy);
+    var b = placeBox(el, w, h);
+    var kind = sp.chart === 'donut' ? 'doughnut' : sp.chart;
+    var CT = pptx.charts || (pptx.ChartType || {});
+    var type = ({ bar: CT.BAR, line: CT.LINE, pie: CT.PIE, doughnut: CT.DOUGHNUT })[kind] || CT.BAR;
+    var data = sp.series.map(function (s, i) { return { name: s.name || ('Qator ' + (i + 1)), labels: sp.labels, values: s.values }; });
+    var pal = (sp.colors && sp.colors.length ? sp.colors : ['#1a73e8', '#34a853', '#fbbc04', '#ea4335']).map(function (c) { return hex6(c, '1A73E8'); });
+    var pie = kind === 'pie' || kind === 'doughnut';
+    var colors = [], need = pie || data.length === 1 ? sp.labels.length : data.length;
+    for (var i = 0; i < need; i++) colors.push(pal[i % pal.length]);
+    var ink = hex6(sp.textColor, '374151');
+    var o = { x: b.x, y: b.y, w: b.w, h: b.h, chartColors: colors, showValue: !pie, dataLabelColor: ink, dataLabelFontSize: 12, dataLabelFontBold: true,
+      showLegend: pie || data.length > 1, legendPos: pie ? 'r' : 't', legendFontSize: 12, legendColor: ink,
+      catAxisLabelColor: ink, catAxisLabelFontSize: 12, valAxisLabelColor: '6B7280', valAxisLabelFontSize: 11,
+      valGridLine: { color: 'E5E7EB', size: 0.75 }, catAxisLabelPos: 'low' };
+    if (pie) { o.showPercent = true; o.showValue = false; o.dataLabelFormatCode = '0%'; o.dataLabelColor = kind === 'pie' ? 'FFFFFF' : ink; if (kind === 'doughnut') o.holeSize = 55; }
+    else if (kind === 'bar') { o.barDir = 'col'; o.barGapWidthPct = 60; if (data.length === 1) o.valAxisHidden = false; }
+    else { o.lineSize = 3; o.lineDataSymbolSize = 8; }
+    if (sp.title) { o.showTitle = true; o.title = String(sp.title); o.titleFontSize = 16; o.titleColor = '111827'; o.titleFontFace = 'Arial'; }
+    slide.addChart(type, data, o);
+    return true;
+  }
+  var TR_XML = { fade: '<p:fade/>', zoom: '<p:zoom dir="in"/>', flip: '<p:cover dir="r"/>', up: '<p:push dir="u"/>', blur: '<p:dissolve/>' };
+  function injectTransition(xml, name) {
+    var key = name == null || name === '' ? 'fade' : String(name);
+    var inner = TR_XML[key];
+    if (!inner || xml.indexOf('<p:transition') >= 0) return xml;
+    var tag = '<p:transition spd="med">' + inner + '</p:transition>';
+    if (/<\/p:clrMapOvr>/.test(xml)) return xml.replace('</p:clrMapOvr>', '</p:clrMapOvr>' + tag);
+    if (/<p:timing[\s>]/.test(xml)) return xml.replace(/<p:timing[\s>]/, function (m) { return tag + m; });
+    return xml.replace('</p:sld>', tag + '</p:sld>');
+  }
+  window.__ssInjectTransition = injectTransition;
+
   var _pptxBusy = false;
 
   async function exportPPTX() {
@@ -870,6 +936,8 @@
               if (!ok) ok = await addImageEl(slide, el, stats);
             }
             else if (t === 'image') ok = await addImageEl(slide, el, stats);
+            else if (el.ssKind === 'table' && el.ssSpec) ok = addTableEl(slide, el);
+            else if (el.ssKind === 'chart' && el.ssSpec) ok = addChartEl(pptx, slide, el);
             else if (t === 'rect' || t === 'circle' || t === 'ellipse' || t === 'triangle') ok = await addShapeEl(pptx, slide, el);
             else ok = await addFallbackEl(slide, el);
             if (!ok) {
@@ -906,6 +974,15 @@
               if (bxml !== axml) zip.file(slideNames[an], bxml);
             } catch (e) { console.warn('PPTX avto-ijro:', e); }
           }
+          // v48: slayd o'tishi — PowerPoint'ning o'z <p:transition> elementi
+          for (var tn = 0; tn < slideNames.length; tn++) {
+            try {
+              var tix = parseInt(slideNames[tn].match(/slide(\d+)\.xml$/)[1], 10) - 1;
+              var txml = await zip.file(slideNames[tn]).async('string');
+              var uxml = injectTransition(txml, slides[tix] && slides[tix].transition);
+              if (uxml !== txml) zip.file(slideNames[tn], uxml);
+            } catch (e) { console.warn('PPTX o\'tish:', e); }
+          }
           for (var sn = 0; sn < slideNames.length; sn++) {
             var sxml = await zip.file(slideNames[sn]).async('string');
             if (sxml.indexOf('SS_Button') < 0) continue;
@@ -925,7 +1002,7 @@
           }
           var payload = {
             version: 2, format: 'slide-studio', title: title,
-            slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [] }; }),
+            slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; }),
             exportedAt: new Date().toISOString()
           };
           zip.file('slide-studio/project.json', JSON.stringify(payload), { compression: 'DEFLATE' });
@@ -1466,7 +1543,7 @@
       if (titleEl) titleEl.innerText = projectTitle;
     }
     slides = list.map(function (s) {
-      return { json: s.json || '{}', thumb: s.thumb || '', imageNumbers: s.imageNumbers || [] };
+      return { json: s.json || '{}', thumb: s.thumb || '', imageNumbers: s.imageNumbers || [], transition: s.transition || '' };
     });
     activeIndex = 0;
     try { reindexAllSlideImages(); } catch (e) {  }

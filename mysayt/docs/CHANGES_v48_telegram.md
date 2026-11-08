@@ -22,3 +22,10 @@
 - **Slayd o'tish animatsiyasi** (butun slayd): Animatsiya panelida (fade, zoom, flip, pastdan, blur, yo'q; «hammasiga»), Namoyishda o'ynaydi. AI: `set_transition` (bepul).
 - **Jadval va grafik:** asboblar panelida «Jadval» / «Grafik» tugmalari; AI `elements[]` ichida `{"type":"table"|"chart"}` yaratadi (ustunli, chiziqli, doira, halqa). PPTX ga rasm bo'lib o'tadi.
 - **Chuqur AI:** rasm qidirish darhol «qidirilmoqda» ko'rsatadi.
+
+## v48.1 — jadval, diagramma va slayd o'tishi hamma joyda (bot + sayt + PowerPoint)
+- **Bot (`tg_decks.py`)**: yangi `table` va `chart` (bar/line/pie/doughnut) slaydlari, `transition` (fade/zoom/flip/up/blur/none) — deck va har bir slayd uchun.
+  - PPTX: **haqiqiy** PowerPoint jadvali va diagrammasi (python-pptx, tahrirlanadi) + `<p:transition>`.
+  - PDF: jadval/diagramma vektor chiziladi. HTML: SVG + slayd o'tish animatsiyasi.
+  - AI: `GEN_SYSTEM`/`EDIT_SYSTEM` yangilandi; `{"op":"transition"}` va `meta.transition`.
+- **Sayt**: jadval/grafik guruhlari `ssSpec` saqlaydi (SERIALIZE_PROPS), PPTX eksportda PptxGenJS `addTable`/`addChart` (haqiqiy obyektlar), har slaydga `<p:transition>` yoziladi; o'tish loyiha faylida (project.json) saqlanadi va tiklanadi.

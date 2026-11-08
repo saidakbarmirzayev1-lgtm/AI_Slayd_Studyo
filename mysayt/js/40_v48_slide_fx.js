@@ -113,6 +113,8 @@
     });
     var g = new fabric.Group(objs, { left: left, top: top, subTargetCheck: false, objectCaching: true });
     g.ssKind = 'table';
+    g.ssSpec = { rows: rows.map(function (r) { var o = []; for (var c = 0; c < cols; c++) o.push(String(r[c] == null ? '' : r[c])); return o; }),
+      header: header, headerFill: hFill, headerColor: hCol, stripe: stripe, fs: fs, w: width, rowH: rowH };
     try { if (el.id) g.set('id', el.id); } catch (e) {}
     return g;
   }
@@ -199,6 +201,7 @@
     }
     var grp = new fabric.Group(objs, { left: left, top: top, subTargetCheck: false, objectCaching: true });
     grp.ssKind = 'chart';
+    grp.ssSpec = { chart: kind === 'donut' ? 'doughnut' : kind, title: el.title || '', labels: labels.slice(0, n), series: series.map(function (s) { return { name: s.name, values: s.values.slice(0, n) }; }), colors: colors.slice(), textColor: ink };
     try { if (el.id) grp.set('id', el.id); } catch (e) {}
     return grp;
   }
