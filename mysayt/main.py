@@ -205,6 +205,10 @@ MAX_TOOL_ROUNDS = 4
 MAX_SEARCHES_PER_TURN = 10
 
 import re as _re
+_DSML_RE = _re.compile(r"DSML|invoke\s+name|tool_call|function_calls", _re.I)
+_NO_TOOLS_NOTE = ("\n\n[MUHIM — BU REJIMDA TOOL YO'Q]\nSizda hech qanday tool/funksiya yo'q: search_images, DSML, invoke, function_calls, tool_call YOZMANG va "
+                  "«rasm qidiraman» deb va'da bermang. Rasmlar serverda oldindan topiladi: foydalanuvchi xabari oxiridagi [TAYYOR RASMLAR] bo'limidagi URL'lardan foydalaning. "
+                  "U bo'lim bo'lmasa — rasm elementi qo'shmang. Javobni darhol yozing: qisqa PART A matn + bitta ```json blok.")
 _NO_IMG_RE = _re.compile(r"rasmsiz|rasm\s*(?:kerak\s*emas|qo'?yma|siz)|without\s+images?|no\s+images?|без\s+(?:картин|изображ|фото)", _re.I)
 _IMG_CTX_RE = _re.compile(r"slayd|slide|taqdimot|rasm|image|photo|foto|fon\b|banner|презент|слайд|изображ|картин", _re.I)
 
@@ -2328,6 +2332,8 @@ async def ws_chat(websocket: WebSocket):
                         )
                 except Exception:
                     sys_p += f"\n\n[LIVE DECK STATE]:\n{str(deck_state)[:6000]}"
+            if model == "deepseek-reasoner":
+                sys_p = sys_p.replace("search_images tool bilan", "tayyor rasm ro'yxatidan").replace("search_images", "(rasm qidirish)") + _NO_TOOLS_NOTE
             messages = [{"role": "system", "content": sys_p}]
             messages.extend(build_history(chat_history))
             user_content = prompt or "Buyruqni bajaring."
@@ -2371,6 +2377,7 @@ async def ws_chat(websocket: WebSocket):
                             print(f"[DEEP-IMG] {type(_pe).__name__}: {str(_pe)[:80]}")
                     msgs = messages
                     n_searches = 0
+                    _dsml_retried = False
                     agg_in = agg_out = agg_tot = 0
                     # v29: qidiruvdan oldin yozilgan matn (PART A) O'CHIRILMAYDI va qayta yozdirilmaydi
                     shown_text = False      # foydalanuvchi allaqachon matn ko'rdi
@@ -2439,6 +2446,15 @@ async def ws_chat(websocket: WebSocket):
                                     raise
                                 except Exception:
                                     continue
+                            if not calls and model == "deepseek-reasoner" and not _dsml_retried and _DSML_RE.search(round_text or "") and "```json" not in (round_text or ""):
+                                _dsml_retried = True           # model mavjud bo'lmagan tool'ni chaqirmoqchi bo'ldi — JSON'siz to'xtab qolmasin
+                                print("[DEEP] DSML/tool matni — qayta so'raladi")
+                                msgs = list(msgs) + [
+                                    {"role": "assistant", "content": _DSML_RE.split(round_text)[0].strip()[:1500] or "Rasmlar tayyor."},
+                                    {"role": "user", "content": "Tool mavjud emas. Rasm kerak bo'lsa [TAYYOR RASMLAR] dagi URL'dan foydalaning, bo'lmasa rasmsiz yozing. "
+                                                                "Hozir FAQAT bitta ```json blok bilan javob bering (actions bilan), qidirishni eslatmang."}]
+                                sep_pending = True
+                                continue
                             if not calls:
                                 break
 
