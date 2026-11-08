@@ -213,7 +213,7 @@ _NO_IMG_RE = _re.compile(r"rasmsiz|rasm\s*(?:kerak\s*emas|qo'?yma|siz)|without\s
 _IMG_CTX_RE = _re.compile(r"slayd|slide|taqdimot|rasm|image|photo|foto|fon\b|banner|презент|слайд|изображ|картин", _re.I)
 
 
-async def _deep_presearch(client: Any, context: str, max_q: int = 3) -> str:
+async def _deep_presearch(client: Any, context: str, max_q: int = 3, websocket: Any = None) -> str:
     """Chuqur AI (deepseek-reasoner) tool chaqira olmaydi — shuning uchun rasmlarni OLDINDAN topib, tayyor URL ro'yxatini beramiz.
     Kichik tez model inglizcha so'rovlarni yozadi, qidiruv parallel ishlaydi. Xatoda bo'sh matn (oqim buzilmaydi)."""
     if not _search_images_sync:
@@ -231,7 +231,17 @@ async def _deep_presearch(client: Any, context: str, max_q: int = 3) -> str:
     qs = [str(q).strip()[:60] for q in qs if str(q).strip()][:max_q]
     if not qs:
         return ""
+    async def _ev(payload: dict) -> None:           # Tez AI dagi kabi chatda «qidirilmoqda» ko'rinadi
+        if websocket is not None:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
+    for n, q in enumerate(qs, 1):
+        await _ev({"type": "search_start", "query": q, "kind": "photo", "n": n})
     res = await asyncio.gather(*[asyncio.wait_for(asyncio.to_thread(_search_images_sync, q, "photo", 8), timeout=25) for q in qs], return_exceptions=True)
+    for q, f in zip(qs, res):
+        await _ev({"type": "search_done", "query": q, "kind": "photo", "count": len(f) if isinstance(f, list) else 0})
     blocks = []
     for q, f in zip(qs, res):
         if isinstance(f, list):
@@ -2370,7 +2380,7 @@ async def ws_chat(websocket: WebSocket):
                                 _want = bool(_cur.get("has_image"))
                                 _ctx = f"Deck topic: {user_content}\nSlide: {_cur.get('title', '')} — {_cur.get('summary', '')}"
                             if _want:
-                                _extra = await _deep_presearch(client, _ctx, 1 if mode == "generate" else 3)
+                                _extra = await _deep_presearch(client, _ctx, 1 if mode == "generate" else 3, websocket)
                                 if _extra:
                                     messages[-1] = {"role": "user", "content": (messages[-1].get("content") or "") + _extra}
                         except Exception as _pe:
