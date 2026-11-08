@@ -18,7 +18,7 @@
 .presentation-overlay.pres-v40 { overflow: hidden; }
 #ssPrepOverlay { z-index: 2147483100 !important; }
 /* Minimalist interfeys: takrorlanuvchi tugmalar yashirildi (menyuda bor) */
-#btnReferral, #btnFeedback { display: none !important; }
+#btnReferral { display: none !important; }
 /* Chap panel: miniatyuralar harakatsiz va silliq */
 #sidebar .slide-thumb img { pointer-events: none; }
 #sidebar .sidebar-slides-scroll { overscroll-behavior: contain; scroll-behavior: auto; }

@@ -142,7 +142,7 @@
     state: { posts: [], total: 0, offset: 0 },
     root: null,
     open: function () {
-      var m = modalShell('feedbackModal', 'Fikr-mulohazalar');
+      var m = modalShell('feedbackModal', 'Izohlar');
       this.root = m.body;
       this.state = { posts: [], total: 0, offset: 0 };
       this.render(true);
@@ -339,14 +339,14 @@
     gift.appendChild(icon('card_giftcard')); gift.appendChild(el('span', 'cm-label', ' +15'));
     gift.onclick = function () { Referral.open(); };
     var fb = el('button', 'btn-community btn-feedback'); fb.id = 'btnFeedback'; fb.type = 'button';
-    fb.title = 'Fikr-mulohazalar'; fb.appendChild(icon('forum')); fb.appendChild(el('span', 'cm-label', ' Fikr'));
+    fb.title = 'Izohlar'; fb.appendChild(icon('forum')); fb.appendChild(el('span', 'cm-label', ' Izohlar'));
     fb.onclick = function () { Feedback.open(); };
     ha.insertBefore(fb, ha.firstChild);
     ha.insertBefore(gift, ha.firstChild);
 
     var fm = $('viewMenu');
     if (fm) {
-      var a = document.createElement('div'); a.innerHTML = '<span class="material-symbols-outlined">forum</span> Fikr-mulohazalar'; a.onclick = function () { Feedback.open(); }; fm.appendChild(a);
+      var a = document.createElement('div'); a.innerHTML = '<span class="material-symbols-outlined">forum</span> Izohlar'; a.onclick = function () { Feedback.open(); }; fm.appendChild(a);
       var b = document.createElement('div'); b.innerHTML = '<span class="material-symbols-outlined">card_giftcard</span> Do\'st taklif qil (+15 varaq)'; b.onclick = function () { Referral.open(); }; fm.appendChild(b);
     }
   }

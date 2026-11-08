@@ -176,6 +176,8 @@
 
   /* yuqori ⚙️ tugma (hamma ekranda, sidebar yopiq bo'lsa ham) */
   function ensureTopButton() {
+    var old = $('ssTopSet'); if (old) { old.remove(); }
+    return;                                   // v49: yuqori o'ng burchakdagi qo'shimcha «Sozlamalar» tugmasi olib tashlandi
     if ($('ssTopSet')) return;
     var host = document.querySelector('.header-actions');
     if (!host) return;

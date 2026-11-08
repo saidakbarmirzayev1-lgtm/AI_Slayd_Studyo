@@ -602,6 +602,24 @@
             }
           }
         } catch (e) { console.warn('pdf.js attachments:', e); }
+        // v49: PDF ni serverda tahlil qilamiz — shakl, rasm va matn ALOHIDA, tahrirlanadigan obyektlar bo'lib ochiladi
+        try {
+          const sres = await fetch('/api/import/pdf', { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: buf });
+          if (sres.ok) {
+            const sj = await sres.json();
+            if (sj && Array.isArray(sj.slides) && sj.slides.length && window.ssApplyImportedSlides) {
+              const list = sj.slides.map(function (s) {
+                let j = s.json; if (typeof j !== 'string') j = JSON.stringify(j);
+                try { if (window.ssAdaptImported) j = window.ssAdaptImportedPdf ? window.ssAdaptImportedPdf(j) : j; } catch (e) {}
+                return { json: j, thumb: '', imageNumbers: [] };
+              });
+              await window.ssApplyImportedSlides(list, sj.title || (file.name || '').replace(/\.pdf$/i, ''));
+              Swal.close();
+              Swal.fire({ icon: 'success', title: 'PDF ochildi', text: list.length + ' ta sahifa: shakl, rasm va matnlar alohida tahrirlanadi.' + (sj.fallback_pages ? ' (' + sj.fallback_pages + ' ta murakkab sahifa fon rasmi bilan)' : ''), timer: 2800, showConfirmButton: false });
+              return;
+            }
+          }
+        } catch (e) { console.warn('PDF server import:', e); }
         // v46.1: Agar bu Slide Studio o'zi yozgan PDF bo'lsa (meta topilmasa ham),
         // ko'rinmas text-layer dan chiqqan "kichik matnlar pastki burchakda" muammosini oldini olamiz.
         // Faqat sahifa rasmini slayd qilib ochamiz — dublikat / kichik matn yo'q.

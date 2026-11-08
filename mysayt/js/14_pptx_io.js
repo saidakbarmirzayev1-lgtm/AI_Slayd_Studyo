@@ -1378,6 +1378,81 @@
       var tree = sdoc.getElementsByTagNameNS(NS_P, 'spTree')[0];
       var phDocs = [layoutDoc, masterDoc];
 
+      /* v49: PPTX ichidagi HAQIQIY jadval va diagrammalar — tahrirlanadigan jadval/grafik obyektlari sifatida */
+      var importGraphicFrame = async function (frame, gdata, uri, groups, srels2) {
+        if (!window.ssSpecToJSON || !gdata) return null;
+        var fx = kid(frame, NS_P, 'xfrm');
+        var off = fx && kid(fx, NS_A, 'off'), ext = fx && kid(fx, NS_A, 'ext');
+        if (!off || !ext) return null;
+        var r0 = applyGroups({ x: num(off.getAttribute('x'), 0), y: num(off.getAttribute('y'), 0), cx: num(ext.getAttribute('cx'), 0), cy: num(ext.getAttribute('cy'), 0), rot: 0, flipH: false, flipV: false }, groups);
+        var L = offX + r0.x * scale, T = offY + r0.y * scale, W2 = Math.max(40, r0.cx * scale), H2 = Math.max(30, r0.cy * scale);
+        if (/table/i.test(uri)) {
+          var tbl = gdata.getElementsByTagNameNS(NS_A, 'tbl')[0];
+          if (!tbl) return null;
+          var rows = [], hFill = null, hCol = null, fsPx = 0, rowHs = [];
+          kids(tbl, NS_A, 'tr').forEach(function (tr, ri) {
+            var cells = [];
+            rowHs.push(num(tr.getAttribute('h'), 0));
+            kids(tr, NS_A, 'tc').forEach(function (tc, ci) {
+              if (tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') { cells.push(''); return; }
+              var tb = kid(tc, NS_A, 'txBody'), parts = [];
+              if (tb) kids(tb, NS_A, 'p').forEach(function (p) {
+                var s = ''; kids(p, NS_A).forEach(function (rn) { if (rn.localName === 'r' || rn.localName === 'fld') { var te = kid(rn, NS_A, 't'); s += te ? te.textContent : ''; } else if (rn.localName === 'br') s += ' '; });
+                if (s.trim()) parts.push(s.trim());
+              });
+              cells.push(parts.join(' '));
+              if (ri === 0 && ci === 0) {
+                var pr = kid(tc, NS_A, 'tcPr'), cf = pr && fillOf(pr, theme);
+                if (cf && !cf.none) hFill = cf.hex;
+                var rp = tb && tb.getElementsByTagNameNS(NS_A, 'rPr')[0];
+                if (rp) { var cc = readColorNode(kid(rp, NS_A, 'solidFill'), theme); if (cc) hCol = cc.hex; }
+              }
+              if (!fsPx) { var rp2 = tb && tb.getElementsByTagNameNS(NS_A, 'rPr')[0]; if (rp2 && rp2.getAttribute('sz')) fsPx = num(rp2.getAttribute('sz'), 0) / 100 * 12700 * scale; }
+            });
+            if (cells.length) rows.push(cells);
+          });
+          if (!rows.length) return null;
+          var spec = { rows: rows, left: L, top: T, width: W2, height: H2, header: true };
+          if (hFill) spec.headerFill = hFill; if (hCol) spec.headerColor = hCol; if (fsPx) spec.fontSize = Math.round(fsPx);
+          return window.ssSpecToJSON('table', spec);
+        }
+        if (/chart/i.test(uri)) {
+          var ce = gdata.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart')[0];
+          var rid3 = ce && ce.getAttributeNS(NS_R, 'id');
+          if (!rid3 || !srels2[rid3] || !zip.file(srels2[rid3].target)) return null;
+          var cdoc = parseXml(await zip.file(srels2[rid3].target).async('string'));
+          var NS_C = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
+          var plotArea = cdoc.getElementsByTagNameNS(NS_C, 'plotArea')[0];
+          if (!plotArea) return null;
+          var kindMap = { barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', areaChart: 'line' };
+          var chartEl = kids(plotArea, NS_C).filter(function (e) { return kindMap[e.localName]; })[0];
+          if (!chartEl) return null;
+          var vals = function (node) { return node ? Array.prototype.map.call(node.getElementsByTagNameNS(NS_C, 'v'), function (v) { return v.textContent; }) : []; };
+          var labels = [], series = [], colors = [];
+          kids(chartEl, NS_C, 'ser').forEach(function (ser, si) {
+            if (!labels.length) labels = vals(kid(ser, NS_C, 'cat')).map(String);
+            var nm = vals(kid(ser, NS_C, 'tx'))[0] || '';
+            series.push({ name: nm, values: vals(kid(ser, NS_C, 'val')).map(function (v) { return parseFloat(v) || 0; }) });
+            var sp2 = kid(ser, NS_C, 'spPr'), cl = sp2 && (fillOf(sp2, theme) || (kid(sp2, NS_A, 'ln') && readColorNode(kid(kid(sp2, NS_A, 'ln'), NS_A, 'solidFill'), theme)));
+            if (cl && !cl.none && (kindMap[chartEl.localName] !== 'pie' && kindMap[chartEl.localName] !== 'doughnut')) colors[si] = cl.hex;
+            if (kindMap[chartEl.localName] === 'pie' || kindMap[chartEl.localName] === 'doughnut') {
+              kids(ser, NS_C, 'dPt').forEach(function (dp) {
+                var ix = num((kid(dp, NS_C, 'idx') || { getAttribute: function () { return 0; } }).getAttribute('val'), 0);
+                var dsp = kid(dp, NS_C, 'spPr'), dc = dsp && fillOf(dsp, theme);
+                if (dc && !dc.none) colors[ix] = dc.hex;
+              });
+            }
+          });
+          if (!series.length) return null;
+          var titleEl = cdoc.getElementsByTagNameNS(NS_C, 'title')[0], ttl = '';
+          if (titleEl) ttl = Array.prototype.map.call(titleEl.getElementsByTagNameNS(NS_A, 't'), function (t) { return t.textContent; }).join('');
+          var spec2 = { chart: kindMap[chartEl.localName], labels: labels, series: series, left: L, top: T, width: W2, height: H2, title: ttl };
+          var cc2 = colors.filter(Boolean); if (cc2.length) spec2.colors = colors.map(function (c, i) { return c || cc2[i % cc2.length]; });
+          return window.ssSpecToJSON('chart', spec2);
+        }
+        return null;
+      };
+
       var walk = async function (container, groups) {
         var nodes = kids(container);
         for (var ni = 0; ni < nodes.length; ni++) {
@@ -1405,6 +1480,9 @@
             if (ln === 'graphicFrame') {
               var gd = n.getElementsByTagNameNS(NS_A, 'graphicData')[0];
               var uri = gd ? (gd.getAttribute('uri') || '') : '';
+              var okObj = null;
+              try { okObj = await importGraphicFrame(n, gd, uri, groups, srels); } catch (e) { console.warn('PPTX jadval/diagramma:', e); }
+              if (okObj) { out.objects.push(okObj); continue; }
               if (/table/i.test(uri)) skipped.table++; else if (/chart/i.test(uri)) skipped.chart++; else skipped.other++;
               continue;
             }
@@ -1597,4 +1675,5 @@
     }
   }
   window.importPptxClient = importPptxClient;
+  window.ssApplyImportedSlides = applyImportedSlides;
 })();

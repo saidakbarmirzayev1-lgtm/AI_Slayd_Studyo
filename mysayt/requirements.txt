@@ -15,3 +15,6 @@ python-pptx>=1.0
 lxml>=4.9
 reportlab>=4.0
 pillow>=10.0
+
+# --- PDF import (backend/pdf_import.py) ---
+pypdfium2>=4.30

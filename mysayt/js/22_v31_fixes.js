@@ -56,6 +56,8 @@
     // Animatsiyali matnda ham: ko'rib chiqish bosish zahoti to'xtaydi (15_video_anim_btn.js), matn tanlanadi va tahrirlanadi.
     canvas.on('mouse:up', function (opt) {
       try {
+        // v49: bitta bosish = faqat tanlash. Tahrirlash — ikki marta bosish yoki Enter (o'z-o'zidan ochilib ketmasin)
+        if (!window.ssSingleClickEdit) return;
         var t = opt && opt.target, ev = opt && opt.e;
         if (!isText(t) || t.isEditing || !opt.isClick) return;
         if (ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || ev.button === 2)) return;

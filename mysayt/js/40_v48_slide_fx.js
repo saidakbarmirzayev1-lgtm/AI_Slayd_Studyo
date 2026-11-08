@@ -119,6 +119,14 @@
     return g;
   }
 
+  /* PPTX/PDF import uchun: spetsifikatsiyadan tayyor fabric JSON obyekti (jadval yoki grafik) */
+  window.ssSpecToJSON = function (kind, spec) {
+    try {
+      var g = kind === 'table' ? buildTable(spec) : buildChart(Object.assign({}, spec, { chart: spec.chart }));
+      return g.toObject(typeof SERIALIZE_PROPS !== 'undefined' ? SERIALIZE_PROPS : ['ssKind', 'ssSpec']);
+    } catch (e) { console.warn('ssSpecToJSON:', e); return null; }
+  };
+
   /* ------------------------------------------------------------------ Grafik */
   function arcPath(cx, cy, r, a0, a1, inner) {
     var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
@@ -273,4 +281,83 @@
     return true;
   }
   var tries = 0, iv = setInterval(function () { if (addToolbarButtons() || ++tries > 40) clearInterval(iv); }, 500);
+
+  /* ------------------------------------------------------------------ «O'tish» — alohida tugma va panel (Animatsiya panelidan ajratilgan) */
+  var pcss = document.createElement('style');
+  pcss.textContent = [
+    '#ssTrPanel{position:fixed;top:112px;right:18px;z-index:2600;width:264px;background:#fff;color:#1f2937;border:1px solid #dadce0;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:14px;font-family:inherit}',
+    '#ssTrPanel h4{margin:0 0 4px;font-size:14px;display:flex;align-items:center;justify-content:space-between}',
+    '#ssTrPanel p{margin:0 0 10px;font-size:12px;color:#6b7280;line-height:1.4}',
+    '#ssTrPanel .trg{display:grid;grid-template-columns:1fr 1fr;gap:6px}',
+    '#ssTrPanel button.t{border:1px solid #dadce0;background:#fff;border-radius:9px;padding:8px 6px;font-size:13px;cursor:pointer}',
+    '#ssTrPanel button.t:hover{background:#f1f3f4}#ssTrPanel button.t.on{background:#e8f0fe;border-color:#1a73e8;color:#1a56db;font-weight:700}',
+    '#ssTrPanel .acts{display:flex;gap:6px;margin-top:10px}#ssTrPanel .acts button{flex:1;border:0;border-radius:9px;padding:8px;font-size:12.5px;cursor:pointer;background:#1a73e8;color:#fff}',
+    '#ssTrPanel .acts button.g{background:#f1f3f4;color:#1f2937}',
+    '#ssTrPanel .x{border:0;background:transparent;font-size:20px;cursor:pointer;color:#5f6368;line-height:1}',
+    '.ss-prev-fade{animation:ssTrFade .7s ease both}.ss-prev-zoom{animation:ssTrZoom .65s cubic-bezier(.22,.61,.36,1) both}.ss-prev-flip{animation:ssTrFlip .8s cubic-bezier(.22,.61,.36,1) both}',
+    '.ss-prev-up{animation:ssTrUp .6s cubic-bezier(.22,.61,.36,1) both}.ss-prev-blur{animation:ssTrBlur .7s ease both}',
+    '@media (max-width:640px){#ssTrPanel{top:auto;bottom:70px;right:10px;left:10px;width:auto}}'
+  ].join('\n');
+  document.head.appendChild(pcss);
+
+  function previewTransition(name) {
+    var nm = name || 'fade';
+    var host = document.querySelector('.canvas-container');
+    if (!host || nm === 'none') return;
+    ['fade', 'zoom', 'flip', 'up', 'blur'].forEach(function (k) { host.classList.remove('ss-prev-' + k); });
+    void host.offsetWidth;
+    host.classList.add('ss-prev-' + nm);
+    setTimeout(function () { host.classList.remove('ss-prev-' + nm); }, 1000);
+  }
+  function renderTrPanel() {
+    var p = document.getElementById('ssTrPanel'); if (!p) return;
+    var s = curSlide(), cur = (s && s.transition) || '';
+    p.innerHTML = '<h4>Varaq ochilish effekti <button class="x" onclick="ssCloseTrPanel()" aria-label="Yopish">×</button></h4>' +
+      '<p>Namoyishda varaqning o\'zi shu effekt bilan ochiladi (birinchi varaq paydo bo\'lgandek). Elementlar animatsiyasi alohida — «Animatsiya».</p>' +
+      '<div class="trg">' + TRANSITIONS.map(function (t) {
+        return '<button class="t' + (cur === t[0] ? ' on' : '') + '" data-t="' + t[0] + '">' + t[1] + '</button>';
+      }).join('') + '</div>' +
+      '<div class="acts"><button class="g" data-a="all">Hamma varaqqa</button><button data-a="prev">Ko\'rish</button></div>';
+    Array.prototype.forEach.call(p.querySelectorAll('button.t'), function (b) {
+      b.onclick = function () { var t = b.getAttribute('data-t'); ssSetTransition(t); previewTransition(t); renderTrPanel(); };
+    });
+    p.querySelector('[data-a="all"]').onclick = function () { ssSetTransition(null, true); renderTrPanel(); };
+    p.querySelector('[data-a="prev"]').onclick = function () { previewTransition(((curSlide() || {}).transition) || 'fade'); };
+  }
+  window.ssCloseTrPanel = function () { var p = document.getElementById('ssTrPanel'); if (p) p.remove(); };
+  window.ssToggleTrPanel = function (e) {
+    try { if (e && e.stopPropagation) e.stopPropagation(); } catch (er) {}
+    var p = document.getElementById('ssTrPanel');
+    if (p) { p.remove(); return; }
+    p = document.createElement('div'); p.id = 'ssTrPanel';
+    document.body.appendChild(p);
+    renderTrPanel();
+  };
+  function rerenderPanel2() { try { renderTrPanel(); } catch (e) {} }
+  var _origSet = window.ssSetTransition;
+  window.ssSetTransition = function () { var r = _origSet.apply(this, arguments); rerenderPanel2(); return r; };
+  document.addEventListener('click', function (e) {
+    var p = document.getElementById('ssTrPanel');
+    if (p && !p.contains(e.target) && !(e.target.closest && e.target.closest('#ssTrBtn,#ssTrTop'))) p.remove();
+  });
+  function addTransitionButtons() {
+    var ok = false;
+    var anim = document.querySelector('.tb-btn[title="Animatsiya"]');
+    if (anim && !document.getElementById('ssTrBtn')) {
+      var b = document.createElement('button');
+      b.className = 'tb-btn'; b.id = 'ssTrBtn'; b.title = "Varaq o'tishi (ochilish effekti)"; b.setAttribute('onclick', 'ssToggleTrPanel(event)');
+      b.innerHTML = '<span class="material-symbols-outlined">auto_awesome_motion</span>';
+      anim.parentNode.insertBefore(b, anim.nextSibling);
+      ok = true;
+    }
+    var top = document.querySelector('.top-menu-anim');
+    if (top && !document.getElementById('ssTrTop')) {
+      var t = document.createElement('div');
+      t.className = 'top-menu-item'; t.id = 'ssTrTop'; t.title = "Varaq o'tishi (ochilish effekti)"; t.setAttribute('onclick', 'ssToggleTrPanel(event)');
+      t.innerHTML = '<span class="material-symbols-outlined" style="font-size:16px;vertical-align:-3px;">auto_awesome_motion</span> O\'tish';
+      top.parentNode.insertBefore(t, top.nextSibling);
+    }
+    return ok || !!document.getElementById('ssTrBtn');
+  }
+  var tries2 = 0, iv2 = setInterval(function () { if (addTransitionButtons() || ++tries2 > 40) clearInterval(iv2); }, 500);
 })();

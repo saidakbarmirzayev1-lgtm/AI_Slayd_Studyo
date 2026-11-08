@@ -14,6 +14,7 @@ Jadvallar: SUPABASE_TELEGRAM.sql
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
 import hashlib
 import hmac
@@ -907,12 +908,7 @@ async def _admin_command(cid: int, user: dict, cmd: str, arg: str) -> None:
         await _send(cid, "Bunday buyruq mavjud emas.")            # oddiy foydalanuvchiga hech narsa oshkor bo'lmaydi
         return
     if cmd == "/admin":
-        rows = []
-        chk = await asyncio.to_thread(adm.check_admin_tg, user["id"])
-        if chk.get("ok") and _https():
-            url = adm.panel_url(SITE_URL, user["id"], chk["email"])
-            rows.append([{"text": "🛡 To'liq panel", "web_app": {"url": url}}])
-        await _send(cid, ADMIN_HELP, {"inline_keyboard": rows} if rows else None)
+        await _admin_home(cid)
         return
     parts = arg.split()
     if not parts:
@@ -955,6 +951,530 @@ async def _admin_command(cid: int, user: dict, cmd: str, arg: str) -> None:
 
 
 # ----------------------------------------------------------------------------------------------
+# ADMIN PANEL — to'liq TUGMALAR bilan, botning ichida (havola kerak emas).
+# «admin» yoki /admin yozing: Statistika · Foydalanuvchi · Reklamalar · Xabar yuborish · Reklama sozlamalari.
+# Faqat ADMIN_TG_IDS dagi Telegram ID ishlaydi; boshqalarga hech narsa ko'rinmaydi.
+# ----------------------------------------------------------------------------------------------
+AD_BTN_TEXTS = ["Batafsil", "Ochish", "Ko'rish", "Sotib olish", "Yozilish"]
+AD_HOURS = [1, 3, 6, 12, 24, 48, 72, 168]
+
+
+def _akb(rows: list) -> dict:
+    return {"inline_keyboard": rows}
+
+
+_HOME = [_btn("🏠 Admin menyu", "a:home")]
+
+
+async def _show(cid: int, mid: Optional[int], text: str, kb: Optional[dict] = None) -> None:
+    """Xabarni tahrirlaydi (iloji bo'lsa), bo'lmasa yangisini yuboradi."""
+    if mid:
+        r = await tg("editMessageText", chat_id=cid, message_id=mid, text=text[:4000], parse_mode="HTML",
+                     disable_web_page_preview=True, reply_markup=kb or {"inline_keyboard": []})
+        if r:
+            return
+    await _send(cid, text, kb)
+
+
+def _adm(user: dict):
+    a = _deps.get("admin")
+    return a if (a and a.is_tg_admin((user or {}).get("id"))) else None
+
+
+def _hours_text(h: float) -> str:
+    h = float(h)
+    if h < 24:
+        return f"{int(h) if h == int(h) else h} soat"
+    d = h / 24.0
+    return f"{int(d) if d == int(d) else round(d, 1)} kun"
+
+
+def _left_text(ends_at: Any) -> str:
+    try:
+        d = datetime.fromisoformat(str(ends_at).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        sec = (d - datetime.now(timezone.utc)).total_seconds()
+    except Exception:
+        return "muddatsiz"
+    if sec <= 0:
+        return "⌛ tugagan"
+    h = sec / 3600
+    return f"{int(h)} soat qoldi" if h >= 1 else f"{max(1, int(sec // 60))} daqiqa qoldi"
+
+
+async def _admin_home(cid: int, mid: Optional[int] = None) -> None:
+    _state(cid).pop("adm", None)
+    await _show(cid, mid, "🛡 <b>Admin panel</b>\nKerakli bo'limni tanlang 👇", _akb([
+        [_btn("📊 Statistika", "a:stats"), _btn("👥 Foydalanuvchi", "a:u")],
+        [_btn("📢 Reklamalar", "a:ads"), _btn("📣 Xabar yuborish", "a:bc")],
+        [_btn("⚙️ Reklama sozlamalari", "a:set")],
+    ]))
+
+
+async def _admin_stats(cid: int, mid: Optional[int], adm) -> None:
+    try:
+        s = await asyncio.to_thread(adm.stats)
+    except Exception:
+        await _show(cid, mid, "⚠️ Statistika olinmadi.", _akb([_HOME]))
+        return
+
+    def n(k):
+        v = s.get(k)
+        return "—" if v is None else f"{int(v):,}".replace(",", " ")
+    text = ("📊 <b>Statistika</b>\n\n"
+            f"👥 Hamma foydalanuvchi: <b>{n('users_total')}</b>\n"
+            f"🟢 24 soatda faol: <b>{n('users_24h')}</b>  ·  7 kunda: <b>{n('users_7d')}</b>\n"
+            f"🆕 Yangi (7 kun): <b>{n('new_7d')}</b>\n"
+            f"✈️ Telegram orqali: <b>{n('tg_users')}</b>  ·  Google ulangan: <b>{n('linked')}</b>\n"
+            f"♾ Cheksiz: <b>{n('unlimited')}</b>  ·  ⛔ Bloklangan: <b>{n('blocked')}</b>\n"
+            f"💳 To'lovlar (30 kun): <b>{n('purchases_30d')}</b>\n\n"
+            f"📢 Faol reklama: <b>{n('ads_active')}</b>\n"
+            f"👁 Ko'rsatilgan: <b>{n('ad_impressions')}</b>  ·  🖱 Bosilgan: <b>{n('ad_clicks')}</b>  ·  CTR: <b>{s.get('ad_ctr', 0)}%</b>")
+    await _show(cid, mid, text, _akb([[_btn("🔄 Yangilash", "a:stats")], _HOME]))
+
+
+# ---------- foydalanuvchi ----------
+def _user_card_kb(b: dict) -> dict:
+    return _akb([
+        [_btn("➕ 10", "a:ua:g10"), _btn("➕ 50", "a:ua:g50"), _btn("➕ 100", "a:ua:g100")],
+        [_btn("➖ 10", "a:ua:t10"), _btn("➖ 50", "a:ua:t50"), _btn("✍️ Boshqa son", "a:ua:num")],
+        [_btn("♾ Cheksizni o'chirish" if b.get("unlimited") else "♾ Cheksiz qilish", "a:ua:unl"),
+         _btn("🔄 Bugungi limitni to'ldirish", "a:ua:fill")],
+        [_btn("🧹 Varaqni 0 qilish", "a:ua:rst"), _btn("✅ Blokdan chiqarish" if b.get("blocked") else "⛔ Bloklash", "a:ua:blk")],
+        [_btn("👤 Boshqa foydalanuvchi", "a:u"), _btn("🏠 Menyu", "a:home")],
+    ])
+
+
+async def _admin_user_card(cid: int, mid: Optional[int], adm, uid: str, note: str = "") -> None:
+    try:
+        b = await asyncio.to_thread(adm.user_brief, uid)
+    except Exception:
+        await _show(cid, mid, "⚠️ Foydalanuvchi topilmadi.", _akb([[_btn("👤 Qayta qidirish", "a:u")], _HOME]))
+        return
+    st = _state(cid)
+    st["adm"] = {"uid": uid}
+    head = (f"✅ {esc(note)}\n\n" if note else "") + "👤 <b>Foydalanuvchi</b>\n" + _user_line(b)
+    await _show(cid, mid, head, _user_card_kb(b))
+
+
+async def _admin_user_action(cid: int, mid: Optional[int], user: dict, adm, code: str) -> None:
+    st = _state(cid)
+    uid = (st.get("adm") or {}).get("uid")
+    if not uid:
+        await _show(cid, mid, "Avval foydalanuvchini tanlang.", _akb([[_btn("👤 Foydalanuvchi", "a:u")], _HOME]))
+        return
+    actor = f"tg:{int(user['id'])}"
+    body: Dict[str, Any] = {"user_id": uid}
+    if code == "num":
+        st["adm"] = {"uid": uid, "await": "num"}
+        await _show(cid, mid, "✍️ Sonni yozing:\n<code>+25</code> — qo'shish\n<code>-10</code> — ayirish\n<code>25</code> — qo'shish",
+                    _akb([[_btn("↩️ Orqaga", "a:ua:back")]]))
+        return
+    if code == "back":
+        await _admin_user_card(cid, mid, adm, uid)
+        return
+    try:
+        if code[0] in "gt" and code[1:].isdigit():
+            n = int(code[1:])
+            body.update(action="add_credits", pages=n if code[0] == "g" else -n)
+        elif code == "unl":
+            cur = await asyncio.to_thread(adm.user_brief, uid)
+            body.update(action="unlimited", value=not cur.get("unlimited"))
+        elif code == "fill":
+            body.update(action="fill_free")
+        elif code == "blk":
+            cur = await asyncio.to_thread(adm.user_brief, uid)
+            body.update(action="block", value=not cur.get("blocked"))
+        elif code == "rst":
+            await asyncio.to_thread(adm.user_action, actor, {"user_id": uid, "action": "set_credits", "free_pages": 0, "paid_pages": 0})
+            body.update(action="unlimited", value=False)
+        else:
+            return
+        res = await asyncio.to_thread(adm.user_action, actor, body)
+        await _admin_user_card(cid, mid, adm, uid, res.get("note") or "Bajarildi")
+    except adm.AdminError as e:
+        await _show(cid, mid, f"⚠️ {esc(e.msg)}", _akb([[_btn("↩️ Orqaga", "a:ua:back")]]))
+    except Exception as e:
+        _warn("admin", f"admin tugma xatosi: {type(e).__name__}: {str(e)[:100]}")
+        await _show(cid, mid, "⚠️ Bajarib bo'lmadi.", _akb([[_btn("↩️ Orqaga", "a:ua:back")]]))
+
+
+# ---------- reklamalar ----------
+async def _admin_ads(cid: int, mid: Optional[int], adm, user: dict) -> None:
+    try:
+        rows = (await asyncio.to_thread(adm._dispatch, "ads", {}, f"tg:{int(user['id'])}")).get("ads", [])
+    except Exception as e:
+        msg = getattr(e, "msg", "") or "Reklama jadvali ulanmagan (SUPABASE_ADMIN.sql ni ishga tushiring)."
+        await _show(cid, mid, f"⚠️ {esc(msg)}", _akb([[_btn("➕ Yangi reklama", "a:ad:new")], _HOME]))
+        return
+    lines = ["📢 <b>Reklamalar</b>"]
+    kb: list = []
+    if not rows:
+        lines.append("\nHali reklama yo'q. «Yangi reklama» ni bosing.")
+    for r in rows[:8]:
+        left = _left_text(r.get("ends_at")) if r.get("ends_at") else "muddatsiz"
+        on = bool(r.get("active")) and left != "⌛ tugagan"
+        where = {"bot": "🤖 bot", "site": "🌐 sayt"}.get(r.get("placement"), "🤖+🌐")
+        title = (r.get("title") or r.get("body") or ("🖼 media" if r.get("media_type") != "none" else "—")).strip().replace("\n", " ")[:28]
+        lines.append(f"\n{'🟢' if on else '⚪️'} <b>#{r['id']}</b> {esc(title)}\n   {where} · {left} · 👁 {r.get('impressions') or 0} · 🖱 {r.get('clicks') or 0}")
+        kb.append([_btn(f"👁 #{r['id']}", f"a:ad:v:{r['id']}"),
+                   _btn(("⏸ O'chirish" if r.get("active") else "▶️ Yoqish") + f" #{r['id']}", f"a:ad:t:{r['id']}"),
+                   _btn(f"🗑 #{r['id']}", f"a:ad:d:{r['id']}")])
+    kb.append([_btn("➕ Yangi reklama", "a:ad:new")])
+    kb.append(_HOME)
+    await _show(cid, mid, "\n".join(lines), _akb(kb))
+
+
+async def _deliver_ad(chat_id: int, title: str, body: str, mtype: str, media: str, link: str = "", btn_text: str = "Batafsil",
+                      label: bool = True) -> bool:
+    text = ""
+    if title:
+        text += f"<b>{esc(title)}</b>\n"
+    if body:
+        text += f"{esc(body)}\n"
+    if label:
+        text += "\n<i>📢 Reklama</i>"
+    kb = _akb([[{"text": f"🔗 {btn_text}", "url": link}]]) if link else None
+    if media.startswith("tg:"):
+        media = media[3:]
+    elif media.startswith("/"):
+        media = SITE_URL + media
+    sent = None
+    if media and mtype == "image":
+        sent = await tg("sendPhoto", chat_id=chat_id, photo=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb)
+    elif media and mtype == "video":
+        sent = await tg("sendVideo", chat_id=chat_id, video=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb, supports_streaming=True)
+    if not sent:
+        sent = await _send(chat_id, text or "📢", kb)
+    return bool(sent)
+
+
+def _wiz_nav(extra: Optional[list] = None) -> dict:
+    rows = list(extra or [])
+    rows.append([_btn("❌ Bekor qilish", "a:w:x")])
+    return _akb(rows)
+
+
+async def _wiz_step(cid: int, mid: Optional[int], step: str) -> None:
+    st = _state(cid)
+    a = st.setdefault("adm", {})
+    a["await"] = None
+    ad = a.setdefault("ad", {"media_type": "none", "media_url": "", "title": "", "body": "", "link_url": "", "button_text": "Batafsil", "placement": "both", "hours": 24})
+    if step == "media":
+        a["await"] = "ad_media"
+        await _show(cid, mid, "➕ <b>Yangi reklama</b> · 1/5\n\n📸 <b>Rasm</b> yoki 🎬 <b>video</b> yuboring.\n<i>Faqat matnli reklama bo'lsa — «Mediasiz» ni bosing.</i>",
+                    _wiz_nav([[_btn("⏭ Mediasiz", "a:w:nomedia")]]))
+    elif step == "text":
+        a["await"] = "ad_text"
+        extra = [[_btn("⏭ Matnsiz (faqat media)", "a:w:notext")]] if ad["media_type"] != "none" else []
+        await _show(cid, mid, "✍️ 2/5 · <b>Reklama matnini yozing.</b>\n<i>Birinchi qator — sarlavha, qolgani — matn.</i>\n\nMasalan:\n<code>Yangi kurs!\n30% chegirma faqat shu hafta.</code>", _wiz_nav(extra))
+    elif step == "link":
+        a["await"] = "ad_link"
+        await _show(cid, mid, "🔗 3/5 · <b>Havolani yuboring</b> (<code>https://...</code>).\n<i>Reklama ostida tugma bo'lib chiqadi.</i>", _wiz_nav([[_btn("⏭ Havolasiz", "a:w:nolink")]]))
+    elif step == "btn":
+        rows = [[_btn(t, f"a:w:b:{i}") for i, t in enumerate(AD_BTN_TEXTS[:3])], [_btn(t, f"a:w:b:{i + 3}") for i, t in enumerate(AD_BTN_TEXTS[3:])]]
+        await _show(cid, mid, "🔘 Tugma yozuvini tanlang (yoki o'zingiz yozing, 24 belgigacha):", _wiz_nav(rows))
+        a["await"] = "ad_btn"
+    elif step == "where":
+        if ad["media_type"] == "video" or str(ad["media_url"]).startswith("tg:"):
+            ad["placement"] = "bot"
+            await _wiz_step(cid, mid, "hours")
+            return
+        await _show(cid, mid, "📍 4/5 · <b>Qayerda ko'rsatilsin?</b>", _wiz_nav([[_btn("🤖 Botda", "a:w:p:bot"), _btn("🌐 Saytda", "a:w:p:site")], [_btn("🤖 + 🌐 Ikkalasida", "a:w:p:both")]]))
+    elif step == "hours":
+        a["await"] = "ad_hours"
+        note = "\n<i>Video faqat botda ko'rsatiladi.</i>" if ad["placement"] == "bot" and ad["media_type"] == "video" else ""
+        rows = [[_btn(_hours_text(h), f"a:w:h:{h}") for h in AD_HOURS[:4]], [_btn(_hours_text(h), f"a:w:h:{h}") for h in AD_HOURS[4:]]]
+        await _show(cid, mid, f"⏰ 5/5 · <b>Necha soat tursin?</b>{note}\nTugmani bosing yoki soat sonini yozing (masalan <code>36</code>).", _wiz_nav(rows))
+    elif step == "confirm":
+        a["await"] = None
+        where = {"bot": "🤖 botda", "site": "🌐 saytda"}.get(ad["placement"], "🤖 + 🌐 ikkalasida")
+        await _show(cid, mid, f"👆 <b>Shunday ko'rinadi.</b>\n\n📍 {where}\n⏰ {_hours_text(ad['hours'])} turadi\n🔗 {esc(ad['link_url']) if ad['link_url'] else 'havolasiz'}\n\nJoylaymizmi?",
+                    _akb([[_btn("✅ Joylash", "a:w:save")], [_btn("✏️ Qaytadan", "a:ad:new"), _btn("❌ Bekor", "a:w:x")]]))
+
+
+async def _wiz_preview(cid: int) -> None:
+    ad = (_state(cid).get("adm") or {}).get("ad") or {}
+    await _deliver_ad(cid, ad.get("title", ""), ad.get("body", ""), ad.get("media_type", "none"), ad.get("media_url", ""),
+                      ad.get("link_url", ""), ad.get("button_text", "Batafsil"))
+
+
+async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
+    ad = dict((_state(cid).get("adm") or {}).get("ad") or {})
+    if not ad:
+        await _admin_home(cid, mid)
+        return
+    ends = datetime.now(timezone.utc) + timedelta(hours=float(ad.get("hours") or 24))
+    raw = {k: ad.get(k) for k in ("title", "body", "media_type", "media_url", "link_url", "button_text", "placement")}
+    raw.update(active=True, weight=1, ends_at=ends.isoformat())
+    try:
+        res = await asyncio.to_thread(adm._dispatch, "ad_save", {"ad": raw}, f"tg:{int(user['id'])}")
+    except Exception as e:
+        msg = getattr(e, "msg", "") or "Saqlanmadi"
+        await _show(cid, mid, f"⚠️ {esc(msg)}", _akb([[_btn("🔁 Qayta urinish", "a:w:save")], _HOME]))
+        return
+    _state(cid).pop("adm", None)
+    await _show(cid, mid, f"✅ <b>Reklama joylandi</b> (#{res.get('id')})\n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
+                _akb([[_btn("📢 Reklamalar", "a:ads")], _HOME]))
+
+
+async def _photo_to_data_url(file_id: str) -> Optional[str]:
+    data = await _download_tg_file(file_id, 12 * 1024 * 1024)
+    if not data:
+        return None
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im = im.convert("RGB") if im.mode not in ("RGB",) else im
+        side = 1280
+        for q in (82, 72, 62, 50):
+            c = im.copy()
+            c.thumbnail((side, side))
+            buf = io.BytesIO()
+            c.save(buf, "JPEG", quality=q, optimize=True)
+            url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+            if len(url) < 1_400_000:
+                return url
+            side = int(side * 0.8)
+    except Exception as e:
+        _warn("adphoto", f"{type(e).__name__}: {str(e)[:80]}")
+    return None
+
+
+async def _admin_input(cid: int, user: dict, msg: dict, st: dict) -> bool:
+    """Admin kutilgan javob (matn / rasm / video) yuborganda. True — xabar shu yerda ishlatildi."""
+    adm = _adm(user)
+    a = st.get("adm") or {}
+    aw = a.get("await")
+    if not adm or not aw:
+        return False
+    text = (msg.get("text") or "").strip()
+    if text.startswith("/"):
+        st.pop("adm", None)
+        return False
+    ad = a.get("ad") or {}
+    if aw == "user":
+        if not text:
+            return True
+        try:
+            row = await asyncio.to_thread(adm.resolve_target, text)
+        except adm.AdminError as e:
+            await _send(cid, f"⚠️ {esc(e.msg)}\nQayta yuboring yoki:", _akb([_HOME]))
+            return True
+        except Exception:
+            await _send(cid, "⚠️ Topib bo'lmadi.", _akb([_HOME]))
+            return True
+        await _admin_user_card(cid, None, adm, str(row["user_id"]))
+        return True
+    if aw == "num":
+        try:
+            raw = text.replace(",", ".").replace(" ", "")
+            v = float(raw)
+            uid = a.get("uid")
+            res = await asyncio.to_thread(adm.user_action, f"tg:{int(user['id'])}", {"user_id": uid, "action": "add_credits", "pages": v})
+            await _admin_user_card(cid, None, adm, uid, res.get("note") or "Bajarildi")
+        except ValueError:
+            await _send(cid, "⚠️ Son yozing: <code>+25</code> yoki <code>-10</code>")
+        except adm.AdminError as e:
+            await _send(cid, f"⚠️ {esc(e.msg)}")
+        return True
+    if aw == "ad_media":
+        ph = msg.get("photo")
+        vid = msg.get("video") or msg.get("animation")
+        doc = msg.get("document") or {}
+        if isinstance(ph, list) and ph:
+            best = max((p for p in ph if isinstance(p, dict) and p.get("file_id")), key=lambda p: int(p.get("file_size") or 0), default=None)
+            url = await _photo_to_data_url(best["file_id"]) if best else None
+            if not url:
+                await _send(cid, "⚠️ Rasmni o'qib bo'lmadi. Boshqa rasm yuboring.")
+                return True
+            ad.update(media_type="image", media_url=url)
+        elif isinstance(doc, dict) and str(doc.get("mime_type", "")).startswith("image/") and doc.get("file_id"):
+            url = await _photo_to_data_url(doc["file_id"])
+            if not url:
+                await _send(cid, "⚠️ Rasmni o'qib bo'lmadi. Boshqa rasm yuboring.")
+                return True
+            ad.update(media_type="image", media_url=url)
+        elif isinstance(vid, dict) and vid.get("file_id"):
+            ad.update(media_type="video", media_url="tg:" + str(vid["file_id"]), placement="bot")
+        else:
+            await _send(cid, "📸 Rasm yoki 🎬 video yuboring (matn emas).", _wiz_nav([[_btn("⏭ Mediasiz", "a:w:nomedia")]]))
+            return True
+        a["ad"] = ad
+        await _wiz_step(cid, None, "text")
+        return True
+    if aw == "ad_text":
+        if not text:
+            return True
+        lines = text.split("\n", 1)
+        ad["title"] = lines[0].strip()[:80]
+        ad["body"] = (lines[1].strip() if len(lines) > 1 else "")[:400]
+        a["ad"] = ad
+        await _wiz_step(cid, None, "link")
+        return True
+    if aw == "ad_link":
+        if not re.match(r"^https?://\S{3,}$", text):
+            await _send(cid, "⚠️ Havola <code>https://</code> bilan boshlansin. Qayta yuboring yoki «Havolasiz» ni bosing.", _wiz_nav([[_btn("⏭ Havolasiz", "a:w:nolink")]]))
+            return True
+        ad["link_url"] = text
+        a["ad"] = ad
+        await _wiz_step(cid, None, "btn")
+        return True
+    if aw == "ad_btn":
+        if text:
+            ad["button_text"] = text[:24]
+            a["ad"] = ad
+            await _wiz_step(cid, None, "where")
+        return True
+    if aw == "ad_hours":
+        try:
+            h = float(text.replace(",", "."))
+            if not (0.1 <= h <= 24 * 90):
+                raise ValueError
+        except ValueError:
+            await _send(cid, "⚠️ Soat sonini yozing (masalan <code>36</code>) yoki tugmani bosing.")
+            return True
+        ad["hours"] = h
+        a["ad"] = ad
+        await _wiz_step(cid, None, "confirm")
+        await _wiz_preview(cid)
+        return True
+    if aw == "bc_text":
+        if len(text) < 2:
+            return True
+        a["bc_text"] = text[:3500]
+        a["await"] = None
+        try:
+            cnt = (await asyncio.to_thread(adm._dispatch, "broadcast_preview", {"audience": a.get("aud", "all")}, f"tg:{int(user['id'])}")).get("count")
+        except Exception:
+            cnt = "?"
+        await _send(cid, f"📣 <b>Xabar:</b>\n\n{esc(a['bc_text'])}\n\n👥 Qabul qiluvchilar: <b>{cnt}</b>\nYuboraymi?",
+                    _akb([[_btn("✅ Yuborish", "a:bc:go")], [_btn("❌ Bekor", "a:home")]]))
+        return True
+    return False
+
+
+async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None:
+    adm = _adm(user)
+    if not adm:
+        return                                                    # admin bo'lmasa — hech narsa (hech qanday ma'lumot ochilmaydi)
+    st = _state(cid)
+    parts = data.split(":")
+    cmd = parts[1] if len(parts) > 1 else "home"
+    actor = f"tg:{int(user['id'])}"
+    if cmd == "home":
+        await _admin_home(cid, mid)
+    elif cmd == "stats":
+        await _admin_stats(cid, mid, adm)
+    elif cmd == "u":
+        st["adm"] = {"await": "user"}
+        await _show(cid, mid, "👤 <b>Foydalanuvchini toping</b>\n\nTelegram ID, email yoki UUID yuboring.\n<i>Telegram ID ni foydalanuvchi botga <code>/id</code> yozib bilib oladi.</i>", _akb([_HOME]))
+    elif cmd == "ua":
+        await _admin_user_action(cid, mid, user, adm, parts[2] if len(parts) > 2 else "")
+    elif cmd == "ads":
+        await _admin_ads(cid, mid, adm, user)
+    elif cmd == "ad":
+        sub = parts[2] if len(parts) > 2 else ""
+        aid = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+        if sub == "new":
+            st["adm"] = {"ad": {"media_type": "none", "media_url": "", "title": "", "body": "", "link_url": "", "button_text": "Batafsil", "placement": "both", "hours": 24}}
+            await _wiz_step(cid, mid, "media")
+        elif sub == "t" and aid:
+            rows = (await asyncio.to_thread(adm._dispatch, "ads", {}, actor)).get("ads", [])
+            cur = next((r for r in rows if int(r["id"]) == aid), None)
+            if cur:
+                await asyncio.to_thread(adm._dispatch, "ad_toggle", {"id": aid, "active": not cur.get("active")}, actor)
+            await _admin_ads(cid, mid, adm, user)
+        elif sub == "d" and aid:
+            await _show(cid, mid, f"🗑 <b>#{aid}</b> reklama o'chirilsinmi?\nBu qaytarilmaydi.", _akb([[_btn("✅ Ha, o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+        elif sub == "dd" and aid:
+            await asyncio.to_thread(adm._dispatch, "ad_delete", {"id": aid}, actor)
+            await _admin_ads(cid, mid, adm, user)
+        elif sub == "v" and aid:
+            try:
+                from backend import ads as _ads
+                row = await asyncio.to_thread(_ads.get_row, aid)
+            except Exception:
+                row = None
+            if row:
+                m = str(row.get("media_url") or "")
+                media = (_ads.media_path(row) if row.get("media_type") != "none" else "")
+                await _deliver_ad(cid, row.get("title", ""), row.get("body", ""), row.get("media_type", "none"), media,
+                                  row.get("link_url", ""), row.get("button_text", "Batafsil"))
+    elif cmd == "w":
+        a = st.get("adm") or {}
+        ad = a.get("ad")
+        sub = parts[2] if len(parts) > 2 else ""
+        if sub == "x":
+            await _admin_home(cid, mid)
+        elif not ad:
+            await _admin_home(cid, mid)
+        elif sub == "nomedia":
+            ad.update(media_type="none", media_url="")
+            await _wiz_step(cid, mid, "text")
+        elif sub == "notext":
+            ad.update(title="", body="")
+            await _wiz_step(cid, mid, "link")
+        elif sub == "nolink":
+            ad.update(link_url="")
+            await _wiz_step(cid, mid, "where")
+        elif sub == "b" and len(parts) > 3 and parts[3].isdigit() and int(parts[3]) < len(AD_BTN_TEXTS):
+            ad["button_text"] = AD_BTN_TEXTS[int(parts[3])]
+            await _wiz_step(cid, mid, "where")
+        elif sub == "p" and len(parts) > 3 and parts[3] in ("bot", "site", "both"):
+            ad["placement"] = parts[3]
+            await _wiz_step(cid, mid, "hours")
+        elif sub == "h" and len(parts) > 3:
+            try:
+                ad["hours"] = float(parts[3])
+            except ValueError:
+                return
+            await _wiz_step(cid, mid, "confirm")
+            await _wiz_preview(cid)
+        elif sub == "save":
+            await _wiz_save(cid, mid, user, adm)
+    elif cmd == "bc":
+        sub = parts[2] if len(parts) > 2 else ""
+        if not sub:
+            await _show(cid, mid, "📣 <b>Xabar yuborish</b>\nKimga yuboramiz?", _akb([
+                [_btn("👥 Hammaga", "a:bc:aud:all"), _btn("🔗 Google ulaganlarga", "a:bc:aud:linked")],
+                [_btn("🆓 Bepul foydalanuvchilarga", "a:bc:aud:free")], _HOME]))
+        elif sub == "aud" and len(parts) > 3 and parts[3] in ("all", "linked", "free", "pro"):
+            st["adm"] = {"await": "bc_text", "aud": parts[3]}
+            await _show(cid, mid, "✍️ Xabar matnini yozing (HTML kerak emas, oddiy matn):", _akb([_HOME]))
+        elif sub == "go":
+            a = st.get("adm") or {}
+            if not a.get("bc_text"):
+                await _admin_home(cid, mid)
+                return
+            try:
+                r = await asyncio.to_thread(adm._dispatch, "broadcast", {"text": a["bc_text"], "audience": a.get("aud", "all")}, actor)
+                st.pop("adm", None)
+                await _show(cid, mid, f"✅ Yuborish boshlandi (job <code>{esc(r.get('job') or r.get('id') or '')}</code>). Bir necha daqiqa ketadi.", _akb([_HOME]))
+            except adm.AdminError as e:
+                await _show(cid, mid, f"⚠️ {esc(e.msg)}", _akb([_HOME]))
+            except Exception:
+                await _show(cid, mid, "⚠️ Yuborib bo'lmadi.", _akb([_HOME]))
+    elif cmd == "set":
+        sub = parts[2] if len(parts) > 2 else ""
+        ap = _deps.get("appsettings") or __import__("backend.appsettings", fromlist=["x"])
+        if sub in ("ads_enabled", "ads_bot", "ads_site"):
+            cur = bool(ap.get(sub, True))
+            await asyncio.to_thread(ap.set_many, {sub: not cur})
+        elif sub == "iv" and len(parts) > 3 and parts[3].isdigit():
+            await asyncio.to_thread(ap.set_many, {"ad_bot_interval_min": int(parts[3])})
+        def onoff(k):
+            return "🟢 yoqilgan" if ap.get(k, True) else "🔴 o'chiq"
+        await _show(cid, mid, "⚙️ <b>Reklama sozlamalari</b>\n\n"
+                    f"Umumiy: {onoff('ads_enabled')}\nBotda: {onoff('ads_bot')}\nSaytda: {onoff('ads_site')}\n"
+                    f"Botda oraliq: <b>{ap.get('ad_bot_interval_min', 15)} daqiqa</b> (bir foydalanuvchiga)",
+                    _akb([[_btn("Umumiy: yoqish/o'chirish", "a:set:ads_enabled")],
+                          [_btn("Botda", "a:set:ads_bot"), _btn("Saytda", "a:set:ads_site")],
+                          [_btn(f"{m} daq", f"a:set:iv:{m}") for m in (5, 15, 30, 60)], _HOME]))
+
+
+# ----------------------------------------------------------------------------------------------
 # Reklama (Pro / VIP / admin ko'rmaydi)
 # ----------------------------------------------------------------------------------------------
 async def _maybe_ad(chat_id: int, uid: str, email: str) -> None:
@@ -971,27 +1491,9 @@ async def _maybe_ad(chat_id: int, uid: str, email: str) -> None:
             return
         ads.bot_mark(str(uid))
         pub = ads.public(row, "bot")
-        text = ""
-        if pub["title"]:
-            text += f"<b>{esc(pub['title'])}</b>\n"
-        if pub["body"]:
-            text += f"{esc(pub['body'])}\n"
-        text += "\n<i>📢 Reklama</i>"
-        rows = []
-        if pub["has_link"]:
-            rows.append([{"text": f"🔗 {pub['button_text']}", "url": SITE_URL + pub["click_url"]}])
-        kb = {"inline_keyboard": rows} if rows else None
-        media = pub["media_url"]
-        if media and media.startswith("/"):
-            media = SITE_URL + media
-        sent = None
-        if media and pub["media_type"] == "image":
-            sent = await tg("sendPhoto", chat_id=chat_id, photo=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb)
-        elif media and pub["media_type"] == "video":
-            sent = await tg("sendVideo", chat_id=chat_id, video=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb, supports_streaming=True)
-        if not sent:
-            sent = await _send(chat_id, text, kb)
-        if sent:
+        link = (SITE_URL + pub["click_url"]) if pub["has_link"] else ""
+        ok = await _deliver_ad(chat_id, pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"])
+        if ok:
             await asyncio.to_thread(ads.bump, int(row["id"]), "impression")
     except Exception as e:
         _warn("ad", f"reklama yuborilmadi: {type(e).__name__}: {str(e)[:100]}")
@@ -1610,57 +2112,135 @@ async def _download_tg_file(file_id: str, limit: int = PPTX_MAX) -> Optional[byt
     return None
 
 
+_TR_REV = {"fade": "fade", "zoom": "zoom", "cover": "flip", "push": "up", "dissolve": "blur"}
+
+
+def _shape_font_pt(sh) -> float:
+    best = 0.0
+    try:
+        for p in sh.text_frame.paragraphs:
+            for r in p.runs:
+                if r.font.size is not None:
+                    best = max(best, float(r.font.size.pt))
+    except Exception:
+        pass
+    return best
+
+
 def _pptx_to_deck(data: bytes, fname: str = "") -> Tuple[Optional[dict], int]:
-    """Yuborilgan PPTX dan matnni (sarlavha, punktlar, jadval) o'qib qisqa deck JSON yasaydi. Rasm/dizayn o'qilmaydi."""
+    """Yuborilgan PPTX dan tuzilmani o'qiydi: sarlavha, punktlar, STATISTIKA, JADVAL, DIAGRAMMA, slayd o'tishi.
+    Pastki kolontitul ("Test", "2 / 8"), kichik yuqori yozuv va bezak shakllar o'tkazib yuboriladi — matn ikkilanmaydi."""
     from pptx import Presentation
     prs = Presentation(io.BytesIO(data))
+    SH = float(prs.slide_height or 1)
     raw, skipped = [], 0
     for sl in prs.slides:
-        title_shape = None
+        texts: List[Tuple[float, float, float, str, float]] = []        # (top, left, pt, text, height)
+        tables, charts = [], []
+        for sh in sl.shapes:
+            try:
+                top = float(sh.top or 0) / SH
+                if getattr(sh, "has_table", False) and sh.has_table:
+                    rows = [[c.text.strip() for c in r.cells] for r in sh.table.rows]
+                    if rows:
+                        tables.append(rows)
+                    continue
+                if getattr(sh, "has_chart", False) and sh.has_chart:
+                    charts.append(sh.chart)
+                    continue
+                if not (getattr(sh, "has_text_frame", False) and sh.has_text_frame):
+                    continue
+                t = "\n".join((p.text or "").strip() for p in sh.text_frame.paragraphs if (p.text or "").strip())
+                if not t:
+                    continue
+                if re.fullmatch(r"\s*\d+\s*/\s*\d+\s*", t):                 # sahifa raqami
+                    continue
+                pt = _shape_font_pt(sh)
+                if top > 0.9 and (pt == 0 or pt <= 14):                         # pastki kolontitul
+                    continue
+                if t.strip().upper() == "SLIDE STUDIO AI":
+                    continue
+                texts.append((top, float(sh.left or 0), pt, t, float(sh.height or 0) / SH))
+            except Exception:
+                continue
+        texts.sort(key=lambda x: (round(x[0], 2), x[1]))
+        tr = ""
         try:
-            title_shape = sl.shapes.title
+            el = sl._element.find("{http://schemas.openxmlformats.org/presentationml/2006/main}transition")
+            tr = _TR_REV.get(el[0].tag.split("}")[1], "") if (el is not None and len(el)) else "none"
         except Exception:
             pass
         title = ""
-        if title_shape is not None and getattr(title_shape, "has_text_frame", False):
-            title = title_shape.text_frame.text.strip()
-        paras: List[str] = []
-        for sh in sl.shapes:
-            if title_shape is not None and sh.shape_id == title_shape.shape_id:
+        title_item = None
+        try:
+            ts = sl.shapes.title
+            if ts is not None and ts.has_text_frame and ts.text_frame.text.strip():
+                title = ts.text_frame.text.strip()
+        except Exception:
+            pass
+        if not title and texts:
+            head = [x for x in texts if x[0] < 0.3]
+            big = max(head or texts, key=lambda x: (x[2], -x[0]))
+            title_item = big
+            title = big[3].replace("\n", " ").strip()
+        rest = [x for x in texts if x is not title_item and x[3].replace("\n", " ").strip() != title]
+        slide: Dict[str, Any] = {"title": title, "transition": tr}
+        if tables:
+            slide.update(layout="table", rows=tables[0])
+        elif charts:
+            ch = charts[0]
+            try:
+                plot = ch.plots[0]
+                ctn = str(ch.chart_type).upper()
+                kind = "doughnut" if "DOUGHNUT" in ctn else ("pie" if "PIE" in ctn else ("line" if "LINE" in ctn or "AREA" in ctn else "bar"))
+                labels = [str(c) for c in plot.categories]
+                series = [{"name": str(s.name or ""), "values": [float(v or 0) for v in s.values]} for s in plot.series]
+                slide.update(layout="chart", chart=kind, labels=labels, series=series)
+            except Exception:
+                skipped += 1
                 continue
-            if getattr(sh, "has_text_frame", False) and sh.has_text_frame:
-                for p in sh.text_frame.paragraphs:
-                    tx = (p.text or "").strip()
-                    if tx:
-                        paras.append(tx)
-            elif getattr(sh, "has_table", False) and sh.has_table:
-                for row in sh.table.rows:
-                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
-                    if cells:
-                        paras.append(" — ".join(cells))
-        if not title and paras:
-            title = paras.pop(0)
-        if not title and not paras:
+        else:
+            # statistika: katta qisqa raqam + uning tagidagi izoh
+            nums = [x for x in rest if x[2] >= 30 and len(x[3]) <= 10]
+            if len(nums) >= 2:
+                stats = []
+                for n in nums[:4]:
+                    lab = ""
+                    below = [x for x in rest if x is not n and x[0] > n[0] and abs(x[1] - n[1]) < 1_500_000 and x[2] < 30]
+                    if below:
+                        lab = min(below, key=lambda x: x[0] - n[0])[3].replace("\n", " ")
+                    stats.append({"value": n[3], "label": lab})
+                slide.update(layout="stats", stats=stats)
+            else:
+                paras = []
+                for x in rest:
+                    paras.extend([ln.strip() for ln in x[3].split("\n") if ln.strip()])
+                slide.update(layout="bullets", bullets=paras, _paras=paras)
+        if not slide.get("title") and not slide.get("_paras") and slide.get("layout") == "bullets":
             skipped += 1
             continue
-        raw.append((title, paras))
+        raw.append(slide)
     if not raw:
         return None, skipped
     if len(raw) > MAX_SLIDES:
         skipped += len(raw) - MAX_SLIDES
         raw = raw[:MAX_SLIDES]
     slides = []
-    for i, (title, paras) in enumerate(raw):
-        if i == 0:
-            slides.append({"layout": "title", "title": title, "subtitle": paras[0] if paras else ""})
-        elif i == len(raw) - 1 and len(raw) >= 3 and len(paras) <= 1:
-            slides.append({"layout": "closing", "title": title, "subtitle": paras[0] if paras else ""})
-        elif paras:
-            slides.append({"layout": "bullets", "title": title, "bullets": paras[:6]})
-        else:
-            skipped += 1
+    for i, s in enumerate(raw):
+        paras = s.pop("_paras", None)
+        if s["layout"] == "bullets":
+            if i == 0:
+                s = {"layout": "title", "title": s["title"], "subtitle": (paras or [""])[0], "transition": s["transition"]}
+            elif i == len(raw) - 1 and len(raw) >= 3 and len(paras or []) <= 1:
+                s = {"layout": "closing", "title": s["title"], "subtitle": (paras or [""])[0], "transition": s["transition"]}
+            elif not paras:
+                skipped += 1
+                continue
+            else:
+                s["bullets"] = paras[:6]
+        slides.append(s)
     base = os.path.splitext(fname or "")[0]
-    deck = decks.normalize_deck({"title": raw[0][0] or base, "subtitle": "", "theme": "ocean", "slides": slides}, MAX_SLIDES + 2, base)
+    deck = decks.normalize_deck({"title": raw[0]["title"] or base, "subtitle": "", "theme": "ocean", "slides": slides}, MAX_SLIDES + 2, base)
     return deck, skipped
 
 
@@ -1914,6 +2494,9 @@ async def _handle_callback(cb: dict) -> None:
     if not isinstance(cid, int) or not isinstance(user.get("id"), int) or _limited(cid, 14):
         return
     st = _state(cid)
+    if data.startswith("a:"):
+        await _admin_cb(cid, mid, user, data)
+        return
     if data in ("credits", "bal"):
         await _show_balance(cid, user)
     elif data == "buy":
@@ -2053,7 +2636,9 @@ async def _send_welcome(chat_id: int, user: dict) -> None:
     except Exception:
         info = None
     await _send(chat_id, _welcome_text(user.get("first_name") or "", info), kb_reply())
-    if info and not info.get("linked") and not _is_admin(user):
+    if _is_admin(user):
+        await _admin_home(chat_id)
+    elif info and not info.get("linked"):
         await _send(chat_id, "🔗 Slayd yaratish uchun avval <b>Google akkauntni ulang</b>.", {"inline_keyboard": [[_btn("🔗 Google ulash", "linkinfo")]]})
 
 
@@ -2075,6 +2660,11 @@ async def handle_update(data: dict) -> None:
         return
     if _limited(chat_id):
         return
+
+    if _is_admin(user):
+        _ast = _state(chat_id)
+        if (_ast.get("adm") or {}).get("await") and await _admin_input(chat_id, user, msg, _ast):
+            return
 
     incoming = _incoming_file(msg)
     if incoming:

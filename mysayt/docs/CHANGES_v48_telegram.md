@@ -34,3 +34,10 @@
 - Sayt slaydlarni brauzerda ham (IndexedDB), window.name orqali ham saqlamaydi: sahifa yangilansa yoki Google'dan qaytsa — hammasi 0 dan. Eski saqlangani ham o'chiriladi.
 - Chap panel eng pastida «Hamma varaqni tozalash» tugmasi (ogohlantirish bilan).
 - «Google bilan kirish» bosilganda hozir ish bo'lsa — «hammasi o'chadi» ogohlantirishi chiqadi; ish bo'lmasa — chiqmaydi.
+
+## v49.1
+- PPTX import: jadval va diagrammalar (statistika) endi native obyekt sifatida ochiladi; botda PPTX qayta o'qilganda matn dublikat bo'lmaydi (`_pptx_to_deck`).
+- PDF import: server tomonda (`/api/import/pdf`, pypdfium2) matn/shakllar tahrirlanadigan obyektga aylanadi; o'rnatilmasa rasm zaxirasi.
+- Namoyish: boshida boshqaruv tugmalari ko'rinadi, keyin yashirinadi; varaq ochilish effekti ("O'tish") alohida tugmada, viewerda ishlaydi, PPTX'ga `<p:transition>` yoziladi.
+- "Izohlar" tugmasi qaytarildi; tepadagi ortiqcha "Sozlamalar" olib tashlandi; bir marta bosganda tahrirga o'tish o'chirildi.
+- Botda to'liq tugmali admin panel (/admin): statistika, foydalanuvchilar, reklama (5 qadamli, muddat soat tugmalari bilan; video `tg:` orqali), xabar yuborish, sozlamalar.

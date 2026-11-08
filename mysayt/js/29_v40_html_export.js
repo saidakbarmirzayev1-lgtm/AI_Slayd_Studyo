@@ -464,7 +464,11 @@
       if (old) { var vs = old.querySelectorAll('video'); for (var k = 0; k < vs.length; k++) { try { vs[k].pause(); } catch (e) {  } } }
       textFixList = [];
       var s = buildSlide(idx);
-      if (!instant) s.classList.add(dir === 'prev' ? 'pres-anim-prev' : 'pres-anim-next');
+      var trn = '';
+      try { trn = String((project.slides[idx] || {}).transition || ''); } catch (e) {  }
+      if (trn === 'none') { /* effektsiz */ }
+      else if (trn) { s.classList.add('tr-' + trn); }                       // butun varaq ochilish effekti (fade/zoom/flip/up/blur)
+      else if (!instant) s.classList.add(dir === 'prev' ? 'pres-anim-prev' : 'pres-anim-next');
       stage.appendChild(s);
       current = s;
       if (old) { try { old.parentNode.removeChild(old); } catch (e) {  } }
@@ -509,7 +513,7 @@
     // interfeysni yashirish (kursor ham) — muharrir namoyishidagidek
     // v42: boshida tugmalar YO'Q. Sichqoncha qimirlasa (yoki bosilsa/tegilsa) chiqadi, 2 soniya qimirlamasa yana yo'qoladi.
     var uiTimer = null, lastMX = -999, lastMY = -999, quietUntil = 0;
-    function uiOn() { app.classList.add('ui-on'); clearTimeout(uiTimer); uiTimer = setTimeout(function () { app.classList.remove('ui-on'); }, 2000); }
+    function uiOn(ms) { app.classList.add('ui-on'); clearTimeout(uiTimer); uiTimer = setTimeout(function () { app.classList.remove('ui-on'); }, ms > 0 ? ms : 2000); }
     document.addEventListener('mousemove', function (e) {
       // slayd almashganda brauzer o'zi "soxta" mousemove yuboradi — haqiqiy siljishni ajratamiz
       if (Math.abs(e.clientX - lastMX) < 3 && Math.abs(e.clientY - lastMY) < 3) return;
@@ -593,7 +597,7 @@
       go: function (n) { go(n); },
       next: function () { go(idx + 1); },
       prev: function () { go(idx - 1); },
-      restart: function (n) { go(n || 0, true); quietUntil = Date.now() + 1500; app.classList.remove('ui-on'); },
+      restart: function (n) { go(n || 0, true); quietUntil = Date.now() + 1500; uiOn(3500); },       // namoyish boshida tugmalar ko'rinib turadi, keyin yashirinadi
       pause: function () {
         if (current) { var vs = current.querySelectorAll('video'); for (var k = 0; k < vs.length; k++) { try { vs[k].pause(); } catch (e) {  } } if (current.parentNode) current.parentNode.removeChild(current); current = null; }
         stage.innerHTML = '';
@@ -633,7 +637,14 @@
     '@keyframes presSlidePrev{from{transform:translateX(-6%) scale(.985);opacity:0}to{transform:translateX(0) scale(1);opacity:1}}',
     '.pres-anim-next{animation:presSlideNext .34s cubic-bezier(.22,.61,.36,1)}',
     '.pres-anim-prev{animation:presSlidePrev .34s cubic-bezier(.22,.61,.36,1)}',
-    '@media (prefers-reduced-motion:reduce){.pres-anim-next,.pres-anim-prev{animation:none}}',
+    '@keyframes trFade{from{opacity:0}to{opacity:1}}',
+    '@keyframes trZoom{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}',
+    '@keyframes trFlip{from{opacity:0;transform:perspective(1200px) rotateY(75deg)}to{opacity:1;transform:perspective(1200px) rotateY(0)}}',
+    '@keyframes trUp{from{opacity:0;transform:translateY(14%)}to{opacity:1;transform:translateY(0)}}',
+    '@keyframes trBlur{from{opacity:0;filter:blur(18px)}to{opacity:1;filter:blur(0)}}',
+    '.tr-fade{animation:trFade .7s ease both}.tr-zoom{animation:trZoom .65s cubic-bezier(.22,.61,.36,1) both}.tr-flip{animation:trFlip .8s cubic-bezier(.22,.61,.36,1) both}',
+    '.tr-up{animation:trUp .6s cubic-bezier(.22,.61,.36,1) both}.tr-blur{animation:trBlur .7s ease both}',
+    '@media (prefers-reduced-motion:reduce){.pres-anim-next,.pres-anim-prev,.tr-fade,.tr-zoom,.tr-flip,.tr-up,.tr-blur{animation:none}}',
     '#controls{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(20,20,20,.85);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-radius:30px;padding:6px 14px;display:flex;align-items:center;gap:10px;color:#fff;z-index:50;border:1px solid rgba(255,255,255,.2);transition:opacity .35s ease,transform .35s ease}',
     '#controls button{background:transparent;border:0;color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center}',
     '#controls button:hover:not(:disabled){background:rgba(255,255,255,.14)}#controls button:disabled{opacity:.35;cursor:default}',
@@ -812,7 +823,7 @@
 
       var project = {
         version: 2, format: 'slide-studio', title: title,
-        slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [] }; }),
+        slides: slides.map(function (s) { return { json: s.json, imageNumbers: s.imageNumbers || [], transition: s.transition || '' }; }),
         exportedAt: new Date().toISOString()
       };
       var anim = '';

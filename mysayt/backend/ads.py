@@ -74,7 +74,9 @@ def clean_ad(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[s
     else:
         if not murl:
             return None, "Media havolasi yoki rasm yuklang"
-        if murl.startswith("data:"):
+        if murl.startswith("tg:"):
+            place = "bot"
+        elif murl.startswith("data:"):
             if mtype != "image" or not _DATA_IMG.match(murl) or len(murl) > MAX_DATA_URL:
                 return None, "Rasm juda katta yoki formati noto'g'ri (PNG/JPG/WEBP, ~1 MB gacha)"
         elif not valid_http_url(murl):

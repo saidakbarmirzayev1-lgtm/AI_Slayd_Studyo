@@ -1032,6 +1032,28 @@ def public_config():
                   for k, v in MODES.items()},
     }
 
+@app.post("/api/import/pdf")
+async def import_pdf(request: Request):
+    """PDF -> tahrirlanadigan slaydlar (shakl, rasm, matn alohida obyekt). Fayl saqlanmaydi."""
+    try:
+        data = await request.body()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Fayl o'qilmadi")
+    if not data or len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="PDF 15 MB dan oshmasin")
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Bu PDF emas")
+    try:
+        from backend import pdf_import
+        res = await asyncio.to_thread(pdf_import.convert, data)
+    except ImportError:
+        raise HTTPException(status_code=501, detail="PDF import serverda o'rnatilmagan")
+    except Exception as e:
+        print(f"[PDF-IMPORT] {type(e).__name__}: {str(e)[:120]}")
+        raise HTTPException(status_code=422, detail="PDF o'qib bo'lmadi")
+    return res
+
+
 @app.post("/api/analyze-images")
 async def analyze_images(payload: Dict[str, Any]):
     images = payload.get("images") if isinstance(payload, dict) else []
