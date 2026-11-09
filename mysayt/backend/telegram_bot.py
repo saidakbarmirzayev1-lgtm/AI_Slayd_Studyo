@@ -154,15 +154,15 @@ def esc(s: Any) -> str:
 # ----------------------------------------------------------------------------------------------
 # Matnlar
 # ----------------------------------------------------------------------------------------------
-BTN_NEW = "🎨 Yangi slayd"
-BTN_MY = "📂 Slaydlarim"
+BTN_NEW = "🎨 Yangi slayd yaratish"
+BTN_MY = "📂 Mening slaydlarim"
 BTN_BAL = "💳 Balans"
 BTN_SITE = "🌐 Saytga o'tish"
 BTN_SET = "⚙️ Sozlamalar"
 BTN_ABOUT = "ℹ️ Yordam"
 MENU = {BTN_NEW: "new", BTN_MY: "my", BTN_BAL: "bal", BTN_SITE: "site", BTN_SET: "set", BTN_ABOUT: "about",
         # eski klaviaturalar foydalanuvchilarda turgan bo'lishi mumkin (Pro tugmasi endi balansga olib boradi):
-        "👑 Pro": "bal", "🎨 Yangi slayd yaratish": "new", "📂 Slaydlarim / Tozalash": "my", "💳 Balans / To'ldirish": "bal", "ℹ️ Bot haqida": "about"}
+        "👑 Pro": "bal", "🎨 Yangi slayd": "new", "📂 Slaydlarim": "my", "📂 Slaydlarim / Tozalash": "my", "💳 Balans / To'ldirish": "bal", "ℹ️ Bot haqida": "about"}
 LINE = "━━━━━━━━━━━━━━━━━━"
 DEFAULT_SLIDES = 8
 
