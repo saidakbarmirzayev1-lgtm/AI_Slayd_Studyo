@@ -231,7 +231,7 @@
   } catch (e) {}
 
   /* ------------------------------------------------------------------ Reklama (chap panel) */
-  var curAd = null, lastKey = null, lastFree = null;
+  var curAd = null, lastKey = null, lastFree = null, closedAd = null;
 
   function renderAdInto(el, ad) {
     var media = '';
@@ -245,6 +245,12 @@
     el.innerHTML = '<span class="ad-num">📢</span>' + (ad.has_link
       ? '<a class="ad-card" target="_blank" rel="noopener sponsored" href="' + esc(ad.click_url) + '">' + inner + '</a>'
       : '<div class="ad-card">' + inner + '</div>');
+    // v49.5: yopish (×) — shu reklama keyingi yangilanishgacha yashiriladi
+    var x = document.createElement('button');
+    x.type = 'button'; x.className = 'ad-close'; x.setAttribute('aria-label', 'Yopish'); x.textContent = '×';
+    x.style.cssText = 'position:absolute;top:6px;right:6px;z-index:5;width:22px;height:22px;border-radius:50%;border:0;background:rgba(0,0,0,.55);color:#fff;font-size:15px;line-height:20px;cursor:pointer;padding:0';
+    x.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); closedAd = ad.id; curAd = null; ensureSlot(); });
+    var cardEl = el.querySelector('.ad-card'); if (cardEl) { if (getComputedStyle(cardEl).position === 'static') cardEl.style.position = 'relative'; cardEl.appendChild(x); }
     var a = el.querySelector('a.ad-card');
     if (a && tgw) a.addEventListener('click', function (e) { e.preventDefault(); openExternal(ad.click_url); });
   }
@@ -270,6 +276,7 @@
       var r = await fetch('/api/ads/next?surface=site' + (curAd ? '&exclude=' + curAd.id : ''), { headers: h, cache: 'no-store' });
       var j = r.ok ? await r.json() : { ad: null };
       curAd = j && j.ad ? j.ad : null;
+      if (curAd && closedAd === curAd.id) curAd = null;     // yopilgan reklama qayta chiqmaydi
     } catch (e) { return; }
     ensureSlot();
   }
@@ -304,7 +311,8 @@
         fetchAd();
       }
     }, 2500);
-    setInterval(fetchAd, 8 * 60 * 1000);                         // 8 daqiqada bir yangi reklama
+    setInterval(fetchAd, 60 * 1000);   // v49.5: o'chirilgan/yangi reklama 1 daqiqada yangilanadi
+    window.addEventListener('focus', function () { fetchAd(); });                         // 8 daqiqada bir yangi reklama
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

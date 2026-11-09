@@ -58,3 +58,9 @@
 ## v49.4
 - Reklama videosi/rasmi endi to'liq chiqadi: rasm baytlari botdan to'g'ridan-to'g'ri yuklanadi; Telegram videosi (20 MB gacha) sayt/Muharrirda ham `/api/ads/media/ID` orqali (Range bilan) ko'rsatiladi — video reklama endi "bot+sayt" bo'la oladi.
 - Reklama joylangach "📤 Hozir hammaga yuborish" tugmasi chiqadi.
+
+## v49.5
+- Varaqlar tozalanishi: kanvas "egasi" (qaysi varaq ko'rsatilgani) kuzatiladi — kanvasdagi mazmun boshqa varaqniki bo'lsa, u hech qachon noto'g'ri varaqqa saqlanmaydi.
+- Saytdagi reklamada yopish (×) tugmasi; o'chirilgan/yangi reklama 1 daqiqada yangilanadi (sahifaga qaytganda darrov).
+- Bot admin: reklama qoralamasi diskka ham saqlanadi (qayta ishga tushsa tiklanadi), "Joylash" ikki marta bosilsa ikkita reklama bo'lmaydi, qoralama topilmasa aniq xabar chiqadi.
+- Reklamani hammaga yuborgach hisobot: nechta yetdi / yetmadi + ID ro'yxati (📋 tugma).

@@ -494,6 +494,14 @@
     }
     window.isSolidBgColor = isSolidBgColor;
     let _canvasLoadGeneration = 0;
+    let _canvasOwner = null;       // v49.5: kanvasda hozir QAYSI varaq obyekti ko'rsatilgan (noto'g'ri varaqqa saqlashni to'xtatadi)
+    function _ownerMismatch() {
+      if (!_canvasOwner) return false;
+      const cur = slides[activeIndex];
+      if (!cur || cur === _canvasOwner) return false;
+      if (slides.indexOf(_canvasOwner) >= 0) return true;   // kanvas boshqa varaqniki — saqlamaymiz
+      _canvasOwner = cur; return false;                      // varaq obyekti almashtirilgan — qabul qilamiz
+    }
     let _canvasDoneGen = 0;        // v49.3: oxirgi YAKUNLANGAN yuklash
     let _canvasLoadingUntil = 0;   // v49.3: yuklash davomida saqlash taqiqlanadi (kanvas vaqtincha noto'g'ri bo'lishi mumkin)
     function loadSlideCanvas(index, callback) {
@@ -554,6 +562,7 @@
         try { parsed = JSON.parse(target.json || '{}'); } catch (e) {}
         canvas.loadFromJSON(target.json, () => {
           if (myGeneration !== _canvasLoadGeneration) {
+            _canvasOwner = target;   // fabric kanvasga aynan shu varaqni qo'ydi (garchi eskirgan bo'lsa ham)
             // v49.3: fabric loadFromJSON o'z kanvasini oxirida tozalab eskirgan obyektlarni qo'yadi.
             // Yangi yuklash undan OLDIN tugagan bo'lsa — kanvas buzilgan: oxirgi varaqni qayta yuklaymiz.
             if (_canvasDoneGen > myGeneration) { try { setTimeout(() => loadSlideCanvas(activeIndex), 0); } catch (e) {} }
@@ -561,7 +570,7 @@
           }
           applyBackgroundToCanvas(canvas, parsed, () => {
             if (myGeneration !== _canvasLoadGeneration) { if (callback) callback(); return; }
-            _canvasDoneGen = myGeneration; _canvasLoadingUntil = 0;
+            _canvasDoneGen = myGeneration; _canvasLoadingUntil = 0; _canvasOwner = target;
             canvas.forEachObject((obj) => {
               obj.set({ objectCaching: false, dirty: true });
               if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') configureTextbox(obj);
@@ -673,7 +682,8 @@
     function saveCurrentSlideState(opts) {
       const force = !!(opts && opts.force);
       if (!slides[activeIndex]) return;
-      if (!force && Date.now() < _canvasLoadingUntil) return;   // v49.3: yuklash tugamaguncha saqlamaymiz
+      if (!force && Date.now() < _canvasLoadingUntil) return;
+      if (_ownerMismatch()) { console.warn('[v49.5] kanvas boshqa varaqniki — saqlash o\'tkazib yuborildi'); return; }   // v49.3: yuklash tugamaguncha saqlamaymiz
       if (window.isAiApplyingCommands || isAiApplyingCommands ||
           window.isAiStreaming || isAiStreaming ||
           isUndoRedoAction || window.isRedoUndoAction) {
@@ -1291,7 +1301,7 @@
     }
     function saveCurrentSlideStateDirectly() {
       if (!slides[activeIndex]) return;
-      if (Date.now() < _canvasLoadingUntil) return;
+      if (Date.now() < _canvasLoadingUntil || _ownerMismatch()) return;
       try {
         slides[activeIndex].json = JSON.stringify(canvas.toJSON(SERIALIZE_PROPS));
         slides[activeIndex].thumb = safeToDataURL(canvas, { format: 'png', multiplier: 0.3 });

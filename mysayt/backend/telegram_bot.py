@@ -324,7 +324,10 @@ def _state(chat_id: int) -> dict:
     _sweep_imgs(now)
     st = _chats.pop(chat_id, None)
     if st is None or now - st.get("ts", 0) > CHAT_TTL:
-        st = {"mode": (st or {}).get("mode", "fast"), "busy": False}
+        keep = {}
+        if st and st.get("adm") and now - st.get("ts", 0) < 6 * 3600:
+            keep = {"adm": st["adm"]}          # v49.5: admin qoralamasi (reklama) uzoq o'ylansa ham yo'qolmasin
+        st = {"mode": (st or {}).get("mode", "fast"), "busy": False, **keep}
     st["ts"] = now
     st["cid"] = chat_id
     _chats[chat_id] = st
@@ -1005,6 +1008,7 @@ def _left_text(ends_at: Any) -> str:
 
 async def _admin_home(cid: int, mid: Optional[int] = None) -> None:
     _state(cid).pop("adm", None)
+    _adm_disk_clear(cid)
     await _show(cid, mid, "🛡 <b>Admin panel</b>\nKerakli bo'limni tanlang 👇\n\n" + ADMIN_HELP.split("\n", 1)[1], _akb([
         [_btn("📊 Statistika", "a:stats"), _btn("👥 Foydalanuvchi", "a:u")],
         [_btn("📢 Reklamalar", "a:ads"), _btn("📣 Xabar yuborish", "a:bc")],
@@ -1173,11 +1177,42 @@ def _wiz_nav(extra: Optional[list] = None) -> dict:
     return _akb(rows)
 
 
+def _adm_disk_path(cid: int) -> str:
+    return os.path.join(os.environ.get("TMPDIR", "/tmp"), f"ss_adm_{int(cid)}.json")
+
+
+def _adm_disk_save(cid: int, a: dict) -> None:
+    try:
+        with open(_adm_disk_path(cid), "w", encoding="utf-8") as f:
+            json.dump({"t": time.time(), "adm": a}, f)
+    except Exception:
+        pass
+
+
+def _adm_disk_clear(cid: int) -> None:
+    try:
+        os.remove(_adm_disk_path(cid))
+    except Exception:
+        pass
+
+
+def _adm_disk_load(cid: int) -> Optional[dict]:
+    try:
+        with open(_adm_disk_path(cid), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if time.time() - float(d.get("t", 0)) < 6 * 3600 and isinstance(d.get("adm"), dict):
+            return d["adm"]
+    except Exception:
+        pass
+    return None
+
+
 async def _wiz_step(cid: int, mid: Optional[int], step: str) -> None:
     st = _state(cid)
     a = st.setdefault("adm", {})
     a["await"] = None
     ad = a.setdefault("ad", {"media_type": "none", "media_url": "", "title": "", "body": "", "link_url": "", "button_text": "Batafsil", "placement": "both", "hours": 24})
+    _adm_disk_save(cid, a)
     if step == "media":
         a["await"] = "ad_media"
         await _show(cid, mid, "➕ <b>Yangi reklama</b> · 1/5\n\n📸 <b>Rasm</b> yoki 🎬 <b>video</b> yuboring.\n<i>Faqat matnli reklama bo'lsa — «Mediasiz» ni bosing.</i>",
@@ -1218,10 +1253,14 @@ async def _wiz_preview(cid: int) -> None:
 
 
 async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
-    ad = dict((_state(cid).get("adm") or {}).get("ad") or {})
+    _a = _state(cid).get("adm") or {}
+    ad = dict(_a.get("ad") or {})
     if not ad:
         await _admin_home(cid, mid)
         return
+    if _a.get("saving"):
+        return                                 # ikki marta bosilsa — ikkita reklama bo'lib ketmasin
+    _a["saving"] = True
     ends = datetime.now(timezone.utc) + timedelta(hours=float(ad.get("hours") or 24))
     raw = {k: ad.get(k) for k in ("title", "body", "media_type", "media_url", "link_url", "button_text", "placement")}
     raw.update(active=True, weight=1, ends_at=ends.isoformat())
@@ -1229,9 +1268,11 @@ async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
         res = await asyncio.to_thread(adm._dispatch, "ad_save", {"ad": raw}, f"tg:{int(user['id'])}")
     except Exception as e:
         msg = getattr(e, "msg", "") or "Saqlanmadi"
+        _a["saving"] = False
         await _show(cid, mid, f"⚠️ {esc(msg)}", _akb([[_btn("🔁 Qayta urinish", "a:w:save")], _HOME]))
         return
     _state(cid).pop("adm", None)
+    _adm_disk_clear(cid)
     await _show(cid, mid, f"✅ <b>Reklama joylandi</b> (#{res.get('id')})\n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
                 _akb([[_btn("📤 Hozir hammaga yuborish", f"a:ad:p:{res.get('id')}")] if res.get("id") else [_btn("📢 Reklamalar", "a:ads")],
                       [_btn("📢 Reklamalar", "a:ads")], _HOME]))
@@ -1270,6 +1311,7 @@ async def _admin_input(cid: int, user: dict, msg: dict, st: dict) -> bool:
     text = (msg.get("text") or "").strip()
     if text.startswith("/"):
         st.pop("adm", None)
+        _adm_disk_clear(cid)
         return False
     ad = a.get("ad") or {}
     if aw == "user":
@@ -1428,6 +1470,15 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
             n = len(await asyncio.to_thread(adm._audience, "free"))
             await _show(cid, mid, f"📤 <b>#{aid}</b> reklama hozir <b>{n}</b> ta foydalanuvchiga (Pro/VIP/adminlardan tashqari) yuboriladi.\nDavom etamizmi?",
                         _akb([[_btn("✅ Yuborish", f"a:ad:pp:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+        elif sub == "r" and aid:
+            rep = _AD_REPORTS.get(aid)
+            if not rep:
+                await _show(cid, mid, "Bu reklama uchun hisobot yo'q (yuborilmagan yoki bot qayta ishga tushgan).", _akb([[_btn("↩️ Reklamalar", "a:ads")]]))
+            else:
+                def _fmt(ids):
+                    return ", ".join(f'<a href="tg://user?id={i}">{i}</a>' for i in ids[:40]) + (f" … (+{len(ids) - 40})" if len(ids) > 40 else "") if ids else "—"
+                await _show(cid, mid, f"📋 <b>Reklama #{aid} hisoboti</b>\n\n✔️ <b>Yetdi ({len(rep['ok'])}):</b>\n{_fmt(rep['ok'])}\n\n✖️ <b>Yetmadi ({len(rep['bad'])}):</b>\n{_fmt(rep['bad'])}",
+                            _akb([[_btn("↩️ Reklamalar", "a:ads")]]))
         elif sub == "pp" and aid:
             try:
                 from backend import ads as _ads
@@ -1443,20 +1494,24 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
 
                 async def _push():
                     ok = bad = 0
+                    good_ids: list = []
+                    bad_ids: list = []
                     for tid in tids:
                         try:
                             if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"]):
-                                ok += 1
+                                ok += 1; good_ids.append(int(tid))
                             else:
-                                bad += 1
+                                bad += 1; bad_ids.append(int(tid))
                         except Exception:
-                            bad += 1
+                            bad += 1; bad_ids.append(int(tid))
                         await asyncio.sleep(0.06)
+                    _AD_REPORTS[int(aid)] = {"ok": good_ids, "bad": bad_ids, "t": time.time()}
                     try:
                         await asyncio.to_thread(_ads.bump, int(row["id"]), "impression")
                     except Exception:
                         pass
-                    await _send(cid, f"✅ Reklama #{aid} yuborildi: <b>{ok}</b> ta yetdi, {bad} ta yetmadi.")
+                    await _send(cid, f"✅ Reklama #{aid} yuborildi:\n✔️ yetdi: <b>{ok}</b>\n✖️ yetmadi: <b>{bad}</b> (botni to'xtatgan/bloklaganlar)",
+                                _akb([[_btn("📋 Kimlarga yetdi / yetmadi", f"a:ad:r:{aid}")], [_btn("📢 Reklamalar", "a:ads")]]))
                 asyncio.create_task(_push())
                 await _show(cid, mid, f"📤 Yuborish boshlandi ({len(tids)} ta). Tugagach xabar keladi.", _akb([[_btn("↩️ Reklamalar", "a:ads")], _HOME]))
         elif sub == "dd" and aid:
@@ -1475,12 +1530,17 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                                   row.get("link_url", ""), row.get("button_text", "Batafsil"))
     elif cmd == "w":
         a = st.get("adm") or {}
+        if not a.get("ad"):
+            d = _adm_disk_load(cid)
+            if d and d.get("ad"):
+                st["adm"] = a = d
         ad = a.get("ad")
         sub = parts[2] if len(parts) > 2 else ""
         if sub == "x":
             await _admin_home(cid, mid)
         elif not ad:
-            await _admin_home(cid, mid)
+            await _show(cid, mid, "⚠️ Reklama qoralamasi topilmadi (bot qayta ishga tushgan bo'lishi mumkin).\nQaytadan boshlang — bu juda tez.",
+                        _akb([[_btn("➕ Yangi reklama", "a:ad:new")], _HOME]))
         elif sub == "nomedia":
             ad.update(media_type="none", media_url="")
             await _wiz_step(cid, mid, "text")
@@ -2183,6 +2243,7 @@ async def _download_tg_file(file_id: str, limit: int = PPTX_MAX) -> Optional[byt
     return None
 
 
+_AD_REPORTS: dict = {}
 _AD_FILE_CACHE: "OrderedDict[str, Tuple[bytes, str]]" = OrderedDict()
 _AD_FILE_CACHE_MAX = 60 * 1024 * 1024
 
@@ -2757,6 +2818,10 @@ async def handle_update(data: dict) -> None:
 
     if _is_admin(user):
         _ast = _state(chat_id)
+        if not (_ast.get("adm") or {}).get("await"):
+            _d = _adm_disk_load(chat_id)         # qayta ishga tushgan bo'lsa — qoralama diskdan tiklanadi
+            if _d and _d.get("await"):
+                _ast["adm"] = _d
         if (_ast.get("adm") or {}).get("await") and await _admin_input(chat_id, user, msg, _ast):
             return
 
