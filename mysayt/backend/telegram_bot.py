@@ -1009,6 +1009,7 @@ def _left_text(ends_at: Any) -> str:
 async def _admin_home(cid: int, mid: Optional[int] = None) -> None:
     _state(cid).pop("adm", None)
     _adm_disk_clear(cid)
+    _ad_sweeper_start()
     await _show(cid, mid, "🛡 <b>Admin panel</b>\nKerakli bo'limni tanlang 👇\n\n" + ADMIN_HELP.split("\n", 1)[1], _akb([
         [_btn("📊 Statistika", "a:stats"), _btn("👥 Foydalanuvchi", "a:u")],
         [_btn("📢 Reklamalar", "a:ads"), _btn("📣 Xabar yuborish", "a:bc")],
@@ -1116,23 +1117,105 @@ async def _admin_ads(cid: int, mid: Optional[int], adm, user: dict) -> None:
     kb: list = []
     if not rows:
         lines.append("\nHali reklama yo'q. «Yangi reklama» ni bosing.")
-    for r in rows[:8]:
+    for _i, r in enumerate(rows[:8], 1):
         left = _left_text(r.get("ends_at")) if r.get("ends_at") else "muddatsiz"
         on = bool(r.get("active")) and left != "⌛ tugagan"
         where = {"bot": "🤖 bot", "site": "🌐 sayt"}.get(r.get("placement"), "🤖+🌐")
         title = (r.get("title") or r.get("body") or ("🖼 media" if r.get("media_type") != "none" else "—")).strip().replace("\n", " ")[:28]
-        lines.append(f"\n{'🟢' if on else '⚪️'} <b>#{r['id']}</b> {esc(title)}\n   {where} · {left} · 👁 {r.get('impressions') or 0} · 🖱 {r.get('clicks') or 0}")
-        kb.append([_btn(f"👁 #{r['id']}", f"a:ad:v:{r['id']}"),
-                   _btn(("⏸ O'chirish" if r.get("active") else "▶️ Yoqish") + f" #{r['id']}", f"a:ad:t:{r['id']}"),
-                   _btn(f"🗑 #{r['id']}", f"a:ad:d:{r['id']}")])
-        kb.append([_btn(f"📤 Hozir hammaga #{r['id']}", f"a:ad:p:{r['id']}"), _btn(f"🔁 Joyi #{r['id']}", f"a:ad:pl:{r['id']}")])
+        lines.append(f"\n{'🟢' if on else '⚪️'} <b>{_i}.</b> {esc(title)}\n   {where} · {left} · 👁 {r.get('impressions') or 0} · 🖱 {r.get('clicks') or 0}")
+        kb.append([_btn(f"👁 {_i}", f"a:ad:v:{r['id']}"),
+                   _btn(("⏸ O'chirish" if r.get("active") else "▶️ Yoqish") + f" {_i}", f"a:ad:t:{r['id']}"),
+                   _btn(f"🗑 {_i}", f"a:ad:d:{r['id']}")])
+        kb.append([_btn(f"📤 Hozir hammaga {_i}", f"a:ad:p:{r['id']}"), _btn(f"🔁 Joyi {_i}", f"a:ad:pl:{r['id']}")])
     kb.append([_btn("➕ Yangi reklama", "a:ad:new")])
     kb.append(_HOME)
     await _show(cid, mid, "\n".join(lines), _akb(kb))
 
 
+_AD_SENT: Dict[int, list] = {}          # reklama_id -> [(chat_id, message_id, vaqt)] — reklama tugasa/o'chsa chatdan ham o'chiriladi
+_AD_SENT_FILE = os.path.join(os.environ.get("TMPDIR", "/tmp"), "ss_ad_sent.json")
+_ad_sweeper_task: Optional["asyncio.Task"] = None
+
+
+def _ad_sent_save() -> None:
+    try:
+        with open(_AD_SENT_FILE, "w", encoding="utf-8") as f:
+            json.dump({str(k): v for k, v in _AD_SENT.items()}, f)
+    except Exception:
+        pass
+
+
+def _ad_sent_load() -> None:
+    try:
+        with open(_AD_SENT_FILE, "r", encoding="utf-8") as f:
+            for k, v in (json.load(f) or {}).items():
+                _AD_SENT.setdefault(int(k), [list(x) for x in v])
+    except Exception:
+        pass
+
+
+def _ad_sent_add(ad_id: int, chat_id: int, msg_id: int) -> None:
+    lst = _AD_SENT.setdefault(int(ad_id), [])
+    lst.append([int(chat_id), int(msg_id), time.time()])
+    if len(lst) > 5000:
+        del lst[:1000]
+    _ad_sent_save()
+
+
+async def _ad_purge(ad_id: int) -> int:
+    """Reklamaning hamma yuborilgan xabarlarini chatlardan o'chiradi."""
+    items = _AD_SENT.pop(int(ad_id), [])
+    _ad_sent_save()
+    n = 0
+    for chat_id, msg_id, ts in items:
+        if time.time() - ts > 47 * 3600:
+            continue                     # Telegram 48 soatdan eskisini o'chirtirmaydi
+        try:
+            if await tg("deleteMessage", chat_id=chat_id, message_id=msg_id):
+                n += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.04)
+    return n
+
+
+async def _ad_sweeper() -> None:
+    """Har daqiqada: muddati tugagan / o'chirilgan / o'chirib qo'yilgan reklamalar chatlardan ham olib tashlanadi."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            ads = _deps.get("ads")
+            if not ads or not _AD_SENT:
+                continue
+            for aid in list(_AD_SENT.keys()):
+                row = await asyncio.to_thread(ads.get_row, aid, False)
+                gone = not row or not row.get("active")
+                if not gone and row.get("ends_at"):
+                    try:
+                        gone = datetime.fromisoformat(str(row["ends_at"]).replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+                    except Exception:
+                        gone = False
+                if gone:
+                    await _ad_purge(aid)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            _warn("adsweep", f"{type(e).__name__}: {str(e)[:80]}")
+
+
+def _ad_sweeper_start() -> None:
+    global _ad_sweeper_task
+    if _ad_sweeper_task is None or _ad_sweeper_task.done():
+        if not _AD_SENT:
+            _ad_sent_load()
+        try:
+            _ad_sweeper_task = asyncio.get_running_loop().create_task(_ad_sweeper())
+        except Exception:
+            pass
+
+
 async def _deliver_ad(chat_id: int, title: str, body: str, mtype: str, media: str, link: str = "", btn_text: str = "Batafsil",
-                      label: bool = True) -> bool:
+                      label: bool = True, ad_id: int = 0, ttl: int = 0) -> bool:
     text = ""
     if title:
         text += f"<b>{esc(title)}</b>\n"
@@ -1168,6 +1251,17 @@ async def _deliver_ad(chat_id: int, title: str, body: str, mtype: str, media: st
         sent = await tg("sendVideo", chat_id=chat_id, video=media, caption=text[:1000], parse_mode="HTML", reply_markup=kb, supports_streaming=True)
     if not sent:
         sent = await _send(chat_id, text or "📢", kb)
+    if sent and ad_id and isinstance(sent, dict) and sent.get("message_id"):
+        _ad_sent_add(ad_id, chat_id, sent["message_id"])
+        _ad_sweeper_start()
+    if sent and ttl and isinstance(sent, dict) and sent.get("message_id"):
+        async def _gone(c=chat_id, m=sent["message_id"], t=ttl):      # ko'rib chiqish (preview) o'zi yo'qoladi
+            await asyncio.sleep(t)
+            await tg("deleteMessage", chat_id=c, message_id=m)
+        try:
+            asyncio.get_running_loop().create_task(_gone())
+        except Exception:
+            pass
     return bool(sent)
 
 
@@ -1249,7 +1343,7 @@ async def _wiz_step(cid: int, mid: Optional[int], step: str) -> None:
 async def _wiz_preview(cid: int) -> None:
     ad = (_state(cid).get("adm") or {}).get("ad") or {}
     await _deliver_ad(cid, ad.get("title", ""), ad.get("body", ""), ad.get("media_type", "none"), ad.get("media_url", ""),
-                      ad.get("link_url", ""), ad.get("button_text", "Batafsil"))
+                      ad.get("link_url", ""), ad.get("button_text", "Batafsil"), ttl=90)
 
 
 async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
@@ -1273,7 +1367,7 @@ async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
         return
     _state(cid).pop("adm", None)
     _adm_disk_clear(cid)
-    await _show(cid, mid, f"✅ <b>Reklama joylandi</b> (#{res.get('id')})\n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
+    await _show(cid, mid, f"✅ <b>Reklama joylandi</b> \n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
                 _akb([[_btn("📤 Hozir hammaga yuborish", f"a:ad:p:{res.get('id')}")] if res.get("id") else [_btn("📢 Reklamalar", "a:ads")],
                       [_btn("📢 Reklamalar", "a:ads")], _HOME]))
 
@@ -1448,9 +1542,11 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
             cur = next((r for r in rows if int(r["id"]) == aid), None)
             if cur:
                 await asyncio.to_thread(adm._dispatch, "ad_toggle", {"id": aid, "active": not cur.get("active")}, actor)
+                if cur.get("active"):
+                    asyncio.create_task(_ad_purge(aid))
             await _admin_ads(cid, mid, adm, user)
         elif sub == "d" and aid:
-            await _show(cid, mid, f"🗑 <b>#{aid}</b> reklama o'chirilsinmi?\nBu qaytarilmaydi.", _akb([[_btn("✅ Ha, o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+            await _show(cid, mid, f"🗑 Reklama o'chirilsinmi?\nBu qaytarilmaydi.", _akb([[_btn("✅ Ha, o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
         elif sub == "pl" and aid:
             try:
                 from backend import ads as _ads
@@ -1460,15 +1556,15 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                 new_pl = order[(order.index(cur_pl) + 1) % 3] if cur_pl in order else "both"
                 raw = dict(row)
                 raw["placement"] = new_pl
-                if str(raw.get("media_url") or "").startswith("tg:") and new_pl != "bot":
-                    new_pl = "bot"; raw["placement"] = "bot"
                 await asyncio.to_thread(adm._dispatch, "ad_save", {"ad": raw}, actor)
             except Exception as e:
                 _warn("ad", f"joy o'zgarmadi: {type(e).__name__}")
             await _admin_ads(cid, mid, adm, user)
         elif sub == "p" and aid:
             n = len(await asyncio.to_thread(adm._audience, "free"))
-            await _show(cid, mid, f"📤 <b>#{aid}</b> reklama hozir <b>{n}</b> ta foydalanuvchiga (Pro/VIP/adminlardan tashqari) yuboriladi.\nDavom etamizmi?",
+            n_all = len(await asyncio.to_thread(adm._audience, "all"))
+            note = "\n\n⚠️ Botda hozircha boshqa foydalanuvchi yo'q ko'rinadi — reklama faqat sizga boradi." if n_all <= 1 else ""
+            await _show(cid, mid, f"📤 Reklama hozir <b>{n}</b> ta foydalanuvchiga yuboriladi (botda jami {n_all} ta; Pro/VIP/adminlar kirmaydi).{note}\nDavom etamizmi?",
                         _akb([[_btn("✅ Yuborish", f"a:ad:pp:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
         elif sub == "r" and aid:
             rep = _AD_REPORTS.get(aid)
@@ -1477,7 +1573,7 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
             else:
                 def _fmt(ids):
                     return ", ".join(f'<a href="tg://user?id={i}">{i}</a>' for i in ids[:40]) + (f" … (+{len(ids) - 40})" if len(ids) > 40 else "") if ids else "—"
-                await _show(cid, mid, f"📋 <b>Reklama #{aid} hisoboti</b>\n\n✔️ <b>Yetdi ({len(rep['ok'])}):</b>\n{_fmt(rep['ok'])}\n\n✖️ <b>Yetmadi ({len(rep['bad'])}):</b>\n{_fmt(rep['bad'])}",
+                await _show(cid, mid, f"📋 <b>Reklama hisoboti</b>\n\n✔️ <b>Yetdi ({len(rep['ok'])}):</b>\n{_fmt(rep['ok'])}\n\n✖️ <b>Yetmadi ({len(rep['bad'])}):</b>\n{_fmt(rep['bad'])}",
                             _akb([[_btn("↩️ Reklamalar", "a:ads")]]))
         elif sub == "pp" and aid:
             try:
@@ -1498,7 +1594,7 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                     bad_ids: list = []
                     for tid in tids:
                         try:
-                            if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"]):
+                            if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"], ad_id=int(aid)):
                                 ok += 1; good_ids.append(int(tid))
                             else:
                                 bad += 1; bad_ids.append(int(tid))
@@ -1510,12 +1606,13 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                         await asyncio.to_thread(_ads.bump, int(row["id"]), "impression")
                     except Exception:
                         pass
-                    await _send(cid, f"✅ Reklama #{aid} yuborildi:\n✔️ yetdi: <b>{ok}</b>\n✖️ yetmadi: <b>{bad}</b> (botni to'xtatgan/bloklaganlar)",
+                    await _send(cid, f"✅ Reklama yuborildi:\n✔️ yetdi: <b>{ok}</b>\n✖️ yetmadi: <b>{bad}</b> (botni to'xtatgan/bloklaganlar)",
                                 _akb([[_btn("📋 Kimlarga yetdi / yetmadi", f"a:ad:r:{aid}")], [_btn("📢 Reklamalar", "a:ads")]]))
                 asyncio.create_task(_push())
                 await _show(cid, mid, f"📤 Yuborish boshlandi ({len(tids)} ta). Tugagach xabar keladi.", _akb([[_btn("↩️ Reklamalar", "a:ads")], _HOME]))
         elif sub == "dd" and aid:
             await asyncio.to_thread(adm._dispatch, "ad_delete", {"id": aid}, actor)
+            asyncio.create_task(_ad_purge(aid))
             await _admin_ads(cid, mid, adm, user)
         elif sub == "v" and aid:
             try:
@@ -1527,7 +1624,7 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                 m = str(row.get("media_url") or "")
                 media = (_ads.media_path(row) if row.get("media_type") != "none" else "")
                 await _deliver_ad(cid, row.get("title", ""), row.get("body", ""), row.get("media_type", "none"), media,
-                                  row.get("link_url", ""), row.get("button_text", "Batafsil"))
+                                  row.get("link_url", ""), row.get("button_text", "Batafsil"), ttl=90)
     elif cmd == "w":
         a = st.get("adm") or {}
         if not a.get("ad"):
@@ -1614,6 +1711,11 @@ async def _maybe_ad(chat_id: int, uid: str, email: str) -> None:
         ads = _deps.get("ads")
         if not ads or not ads.surface_enabled("bot") or not ads.bot_due(str(uid)):
             return
+        try:
+            if _deps.get("admin") and _deps["admin"].is_tg_admin(chat_id):
+                return                          # admin o'z botida reklama ko'rmaydi
+        except Exception:
+            pass
         usage = await asyncio.to_thread(_usage_now_sync, uid, email)
         if _deps["usage_payload"](usage).get("ad_free"):
             return
@@ -1623,7 +1725,7 @@ async def _maybe_ad(chat_id: int, uid: str, email: str) -> None:
         ads.bot_mark(str(uid))
         pub = ads.public(row, "bot")
         link = (SITE_URL + pub["click_url"]) if pub["has_link"] else ""
-        ok = await _deliver_ad(chat_id, pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"])
+        ok = await _deliver_ad(chat_id, pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"], ad_id=int(row["id"]))
         if ok:
             await asyncio.to_thread(ads.bump, int(row["id"]), "impression")
     except Exception as e:

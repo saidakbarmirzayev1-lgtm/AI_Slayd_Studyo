@@ -64,3 +64,16 @@
 - Saytdagi reklamada yopish (×) tugmasi; o'chirilgan/yangi reklama 1 daqiqada yangilanadi (sahifaga qaytganda darrov).
 - Bot admin: reklama qoralamasi diskka ham saqlanadi (qayta ishga tushsa tiklanadi), "Joylash" ikki marta bosilsa ikkita reklama bo'lmaydi, qoralama topilmasa aniq xabar chiqadi.
 - Reklamani hammaga yuborgach hisobot: nechta yetdi / yetmadi + ID ro'yxati (📋 tugma).
+
+## v49.6
+- Botdagi admin reklama ro'yxatida baza raqamlari (#5) ko'rsatilmaydi: 1., 2., 3. tartib raqami; xabarlarda raqam yo'q.
+- "Hozir hammaga" tasdig'ida jami/qabul qiluvchilar soni ko'rsatiladi (faqat siz bo'lsangiz — ogohlantirish).
+
+## v49.6
+- Reklama xabarlari chatlardan ham o'chadi: reklama o'chirilsa/o'chirib qo'yilsa darrov, muddati tugasa har daqiqada tekshiruv bilan (Telegram 48 soatgacha o'chirishga ruxsat beradi).
+- Reklama raqamlari (#5) ko'rsatilmaydi.
+
+## v49.6
+- Reklamalarda ichki raqam (#5) ko'rsatilmaydi — ro'yxatda 1, 2, 3 tartibida.
+- Admin ko'rib chiqish (preview) xabarlari 90 soniyadan keyin o'zi o'chadi; admin o'z botida reklama olmaydi.
+- Muddati tugagan/o'chirilgan reklama xabarlari foydalanuvchilar chatidan ham o'chiriladi (har daqiqa tekshiriladi).
