@@ -1485,7 +1485,8 @@ async def ads_next(request: Request, surface: str = "site", token: str = "", exc
     row = None if ad_free else await asyncio.to_thread(ads_mod.pick, "site", False, exclude or None)
     if not row:
         return JSONResponse({"ad": None}, headers={"Cache-Control": "no-store"})
-    asyncio.get_running_loop().run_in_executor(None, ads_mod.bump, int(row["id"]), "impression")
+    if not exclude or int(row["id"]) != int(exclude):      # v51: o'sha reklama allaqachon ko'rinib turgan bo'lsa (60 s so'rov) qayta sanalmaydi
+        asyncio.get_running_loop().run_in_executor(None, ads_mod.bump, int(row["id"]), "impression")
     return JSONResponse({"ad": ads_mod.public(row, "site")}, headers={"Cache-Control": "no-store"})
 
 @app.get("/api/ads/click/{ad_id}")

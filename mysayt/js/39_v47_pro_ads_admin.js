@@ -260,7 +260,13 @@
     var sb = $('sidebar'); if (!sb) return;
     var scroll = sb.querySelector('.sidebar-slides-scroll');
     if (!curAd) { if (slotEl && slotEl.parentNode) slotEl.remove(); return; }
-    if (!scroll) return;
+    if (!scroll) {                       // v51: sahifa yangilanganda panel kechroq paydo bo'ladi — reklama yo'qolib qolmasin, qayta urinamiz
+      if (!ensureSlot._t && (ensureSlot._n = (ensureSlot._n || 0) + 1) <= 30) {
+        ensureSlot._t = setTimeout(function () { ensureSlot._t = null; ensureSlot(); }, 500);
+      }
+      return;
+    }
+    ensureSlot._n = 0;
     if (!slotEl) { slotEl = document.createElement('div'); slotEl.id = 'ssAdSlot'; }
     if (slotEl.dataset.ad !== String(curAd.id)) renderAdInto(slotEl, curAd);
     var addBtn = scroll.querySelector('.btn-add-slide-bottom');
@@ -289,7 +295,7 @@
     new MutationObserver(function () {
       if (rafPending) return; rafPending = true;
       requestAnimationFrame(function () { rafPending = false; ensureSlot(); });
-    }).observe(sb, { childList: true });
+    }).observe(sb, { childList: true, subtree: true });     // v51: varaqlar ro'yxati qayta chizilganda reklama kartasi o'chib ketmasin
   }
 
   document.addEventListener('ss:usage', function (e) {

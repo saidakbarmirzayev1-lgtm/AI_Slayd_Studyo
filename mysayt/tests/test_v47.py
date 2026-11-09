@@ -383,6 +383,7 @@ def test_bot_requires_google_before_slides(env, tgrec):
     c, sb = env
     bot._deps["supabase_getter"] = lambda: sb
     bot._uids[888] = ("u-tg", "tg888@t.me")                              # Google ulanmagan oddiy foydalanuvchi
+    asyncio.run(bot.handle_update(msg(888, "🎨 Yangi slayd")))             # v51: avval tugma, keyin mavzu
     asyncio.run(bot.handle_update(msg(888, "Sun'iy intellekt")))
     out = tgrec.calls[-1][1]
     assert "Google" in out["text"] and "linkinfo" in json.dumps(out["reply_markup"])
