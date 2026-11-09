@@ -27,13 +27,14 @@ DEFAULTS: Dict[str, Any] = {
     "ads_enabled": True,                           # umumiy reklama kaliti
     "ads_site": True,                              # saytda (chap panel)
     "ads_bot": True,                               # Telegram botda
+    "ad_purge_on_expire": False,                    # muddati tugaganda botdagi xabarlarni ham o'chirish (standart: yo'q)
     "ad_bot_interval_min": 15,                     # botda bir foydalanuvchiga reklama oralig'i (daqiqa)
     "maintenance": False,                          # texnik ishlar rejimi (adminlardan boshqasiga AI yopiladi)
     "maintenance_text": "Texnik ishlar olib borilmoqda. Birozdan keyin urinib ko'ring.",
     "announcement": "",                            # saytda tepada ko'rinadigan e'lon (bo'sh = yo'q)
 }
 INT_KEYS = {"free_daily_pages", "pro_daily_pages", "pack_pages", "daily_message_limit", "ad_bot_interval_min"}
-BOOL_KEYS = {"ads_enabled", "ads_site", "ads_bot", "maintenance"}
+BOOL_KEYS = {"ads_enabled", "ads_site", "ads_bot", "maintenance", "ad_purge_on_expire"}
 STR_KEYS = {"maintenance_text", "announcement"}
 _cache: Dict[str, Any] = dict(DEFAULTS)
 

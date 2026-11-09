@@ -502,13 +502,14 @@
       if (slides.indexOf(_canvasOwner) >= 0) return true;   // kanvas boshqa varaqniki — saqlamaymiz
       _canvasOwner = cur; return false;                      // varaq obyekti almashtirilgan — qabul qilamiz
     }
+    let _canvasLoadDoneAt = 0;     // v50: oxirgi yuklash qachon tugadi
     let _canvasDoneGen = 0;        // v49.3: oxirgi YAKUNLANGAN yuklash
     let _canvasLoadingUntil = 0;   // v49.3: yuklash davomida saqlash taqiqlanadi (kanvas vaqtincha noto'g'ri bo'lishi mumkin)
     function loadSlideCanvas(index, callback) {
       const target = slides[index];
       if (!target) { if (callback) callback(); return; }
       const myGeneration = ++_canvasLoadGeneration;
-      _canvasLoadingUntil = Date.now() + 8000;
+      _canvasLoadingUntil = Date.now() + 25000;   // v50: yuklash tugamaguncha (rasm/media sekin bo'lsa ham) HECH QANDAY saqlash (force ham) kanvasni varaqqa yozmaydi
 
       let _preBg = '#f1f3f4';
       let _preHasMediaBg = false;
@@ -570,7 +571,7 @@
           }
           applyBackgroundToCanvas(canvas, parsed, () => {
             if (myGeneration !== _canvasLoadGeneration) { if (callback) callback(); return; }
-            _canvasDoneGen = myGeneration; _canvasLoadingUntil = 0; _canvasOwner = target;
+            _canvasDoneGen = myGeneration; _canvasLoadingUntil = 0; _canvasLoadDoneAt = Date.now(); _canvasOwner = target;
             canvas.forEachObject((obj) => {
               obj.set({ objectCaching: false, dirty: true });
               if (obj.type === 'textbox' || obj.type === 'i-text' || obj.type === 'text') configureTextbox(obj);
@@ -681,8 +682,10 @@
     }
     function saveCurrentSlideState(opts) {
       const force = !!(opts && opts.force);
+      const allowEmpty = !!(opts && opts.allowEmpty);
       if (!slides[activeIndex]) return;
-      if (!force && Date.now() < _canvasLoadingUntil) return;
+      // v50: yuklash davomida kanvas bo'sh/yarim bo'ladi — force bo'lsa ham saqlab bo'lmaydi (rasmli varaq mazmuni yo'qolishining sababi shu edi)
+      if (Date.now() < _canvasLoadingUntil) return;
       if (_ownerMismatch()) { console.warn('[v49.5] kanvas boshqa varaqniki — saqlash o\'tkazib yuborildi'); return; }   // v49.3: yuklash tugamaguncha saqlamaymiz
       if (window.isAiApplyingCommands || isAiApplyingCommands ||
           window.isAiStreaming || isAiStreaming ||
@@ -710,7 +713,7 @@
           if (isSolidBgColor(prevParsed.background)) prevBgColor = prevParsed.background;
           else if (isSolidBgColor(prevParsed.backgroundColor)) prevBgColor = prevParsed.backgroundColor;
           if (prevParsed.backgroundVideo && prevParsed.backgroundVideo.url) prevBgVideo = prevParsed.backgroundVideo;
-          if (!force && prevObjs.length > 0 && currentObjs.length === 0) {
+          if (prevObjs.length > 0 && currentObjs.length === 0 && (!force || (!allowEmpty && Date.now() - _canvasLoadDoneAt < 6000))) {
             console.warn("Kutilmagan bo'sh canvas saqlanishi to'xtatildi (race).");
             skipFullSave = true;
           }
@@ -722,12 +725,7 @@
           }
         } catch (_) {}
         if (skipFullSave) {
-
-          try {
-            const t = safeToDataURL(canvas, { format: 'png', multiplier: 0.3 });
-            if (t && t.length > 100) slides[activeIndex].thumb = t;
-          } catch (_) {}
-          return;
+          return;     // v50: yarim yuklangan kanvasdan miniatyura OLINMAYDI (chap paneldagi varaq faqat fon bo'lib qolardi)
         }
 
         const _userChoseColor = (slides[activeIndex].bgType === 'color');
@@ -871,7 +869,7 @@
           canvas.requestRenderAll();
         } catch (e) {}
       });
-      saveCurrentSlideState({ force: true });
+      saveCurrentSlideState({ force: true, allowEmpty: true });
       updateAllImageBadges();
       recordGlobalState();
       try {

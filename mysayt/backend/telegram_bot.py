@@ -1124,8 +1124,8 @@ async def _admin_ads(cid: int, mid: Optional[int], adm, user: dict) -> None:
         title = (r.get("title") or r.get("body") or ("🖼 media" if r.get("media_type") != "none" else "—")).strip().replace("\n", " ")[:28]
         lines.append(f"\n{'🟢' if on else '⚪️'} <b>{_i}.</b> {esc(title)}\n   {where} · {left} · 👁 {r.get('impressions') or 0} · 🖱 {r.get('clicks') or 0}")
         kb.append([_btn(f"👁 {_i}", f"a:ad:v:{r['id']}"),
-                   _btn(("⏸ O'chirish" if r.get("active") else "▶️ Yoqish") + f" {_i}", f"a:ad:t:{r['id']}"),
-                   _btn(f"🗑 {_i}", f"a:ad:d:{r['id']}")])
+                   _btn((f"⏹ To'xtatish {_i}" if on else f"▶️ Yoqish {_i}"), f"a:ad:t:{r['id']}"),
+                   _btn(f"🗑 Botdan ham o'chirish {_i}", f"a:ad:d:{r['id']}")])
         kb.append([_btn(f"📤 Hozir hammaga {_i}", f"a:ad:p:{r['id']}"), _btn(f"🔁 Joyi {_i}", f"a:ad:pl:{r['id']}")])
     kb.append([_btn("➕ Yangi reklama", "a:ad:new")])
     kb.append(_HOME)
@@ -1179,23 +1179,112 @@ async def _ad_purge(ad_id: int) -> int:
     return n
 
 
+_PREVIEWS: list = []                    # [[chat_id, message_id, o'chish_vaqti]] — ko'rib chiqish xabarlari (restartdan keyin ham o'chadi)
+_PREVIEWS_FILE = os.path.join(os.environ.get("TMPDIR", "/tmp"), "ss_ad_previews.json")
+_ad_tasks: set = set()
+
+
+def _keep_task(t: "asyncio.Task") -> "asyncio.Task":
+    """Task'ga kuchli havola: aks holda Python uni o'rtada o'chirib yuborishi mumkin."""
+    _ad_tasks.add(t)
+    t.add_done_callback(_ad_tasks.discard)
+    return t
+
+
+def _previews_save() -> None:
+    try:
+        with open(_PREVIEWS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_PREVIEWS, f)
+    except Exception:
+        pass
+
+
+def _previews_load() -> None:
+    try:
+        with open(_PREVIEWS_FILE, "r", encoding="utf-8") as f:
+            for x in (json.load(f) or []):
+                if x not in _PREVIEWS:
+                    _PREVIEWS.append(list(x))
+    except Exception:
+        pass
+
+
+def _preview_add(chat_id: int, msg_id: int, ttl: int) -> None:
+    _PREVIEWS.append([int(chat_id), int(msg_id), time.time() + max(5, int(ttl))])
+    _previews_save()
+
+
+async def _previews_sweep() -> None:
+    now = time.time()
+    due = [x for x in _PREVIEWS if x[2] <= now]
+    if not due:
+        return
+    for x in due:
+        try:
+            _PREVIEWS.remove(x)
+        except ValueError:
+            pass
+    _previews_save()
+    for chat_id, msg_id, _t in due:
+        try:
+            await tg("deleteMessage", chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+        await asyncio.sleep(0.04)
+
+
+def _ad_set_ends(adm, aid: int, when: datetime) -> None:
+    sb = adm._sb()
+    if sb:
+        sb.table("ads").update({"ends_at": when.isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", int(aid)).execute()
+    ads = _deps.get("ads")
+    if ads:
+        ads.invalidate()
+
+
+def _ad_expire_rows() -> list:
+    """Muddati o'tgan faol reklamalarni «tugadi» (active=false) qiladi. Yozuv O'CHMAYDI — statistika qoladi."""
+    adm, ads = _deps.get("admin"), _deps.get("ads")
+    sb = adm._sb() if adm else None
+    if not sb:
+        return []
+    now = datetime.now(timezone.utc)
+    done = []
+    rows = sb.table("ads").select("id,ends_at").eq("active", True).execute().data or []
+    for r in rows:
+        try:
+            e = datetime.fromisoformat(str(r.get("ends_at")).replace("Z", "+00:00")) if r.get("ends_at") else None
+        except Exception:
+            e = None
+        if e is not None and e.tzinfo is None:
+            e = e.replace(tzinfo=timezone.utc)
+        if e is not None and e <= now:
+            sb.table("ads").update({"active": False, "updated_at": now.isoformat()}).eq("id", int(r["id"])).execute()
+            done.append(int(r["id"]))
+    if done and ads:
+        ads.invalidate()
+    return done
+
+
 async def _ad_sweeper() -> None:
-    """Har daqiqada: muddati tugagan / o'chirilgan / o'chirib qo'yilgan reklamalar chatlardan ham olib tashlanadi."""
+    """Har 15 soniyada: ko'rib chiqish xabarlari o'chadi. Har daqiqada: muddati tugagan reklama «tugadi» bo'ladi
+    (saytdan ham, yangi yuborishdan ham chiqadi, yozuv saqlanadi); butunlay o'chirilgan reklamaning xabarlari chatdan olinadi."""
+    tick = 0
     while True:
         try:
-            await asyncio.sleep(60)
-            ads = _deps.get("ads")
-            if not ads or not _AD_SENT:
+            await asyncio.sleep(15)
+            await _previews_sweep()
+            tick += 1
+            if tick % 4:
                 continue
+            ended = await asyncio.to_thread(_ad_expire_rows)
+            ads = _deps.get("ads")
+            purge_on_end = bool((_deps.get("settings").get("ad_purge_on_expire", False)) if _deps.get("settings") else False)
             for aid in list(_AD_SENT.keys()):
-                row = await asyncio.to_thread(ads.get_row, aid, False)
-                gone = not row or not row.get("active")
-                if not gone and row.get("ends_at"):
-                    try:
-                        gone = datetime.fromisoformat(str(row["ends_at"]).replace("Z", "+00:00")) <= datetime.now(timezone.utc)
-                    except Exception:
-                        gone = False
-                if gone:
+                row = await asyncio.to_thread(ads.get_row, aid, False) if ads else None
+                if not row:                                   # reklama butunlay o'chirilgan
+                    await _ad_purge(aid)
+                elif purge_on_end and aid in ended:           # ixtiyoriy: tugaganda chatdan ham olish (standart: yo'q)
                     await _ad_purge(aid)
         except asyncio.CancelledError:
             return
@@ -1208,6 +1297,8 @@ def _ad_sweeper_start() -> None:
     if _ad_sweeper_task is None or _ad_sweeper_task.done():
         if not _AD_SENT:
             _ad_sent_load()
+        if not _PREVIEWS:
+            _previews_load()
         try:
             _ad_sweeper_task = asyncio.get_running_loop().create_task(_ad_sweeper())
         except Exception:
@@ -1255,14 +1346,49 @@ async def _deliver_ad(chat_id: int, title: str, body: str, mtype: str, media: st
         _ad_sent_add(ad_id, chat_id, sent["message_id"])
         _ad_sweeper_start()
     if sent and ttl and isinstance(sent, dict) and sent.get("message_id"):
-        async def _gone(c=chat_id, m=sent["message_id"], t=ttl):      # ko'rib chiqish (preview) o'zi yo'qoladi
-            await asyncio.sleep(t)
-            await tg("deleteMessage", chat_id=c, message_id=m)
+        _preview_add(chat_id, sent["message_id"], ttl)          # ko'rib chiqish xabari ttl soniyadan keyin o'chadi
+        _ad_sweeper_start()
+    return bool(sent)
+
+
+async def _push_ad_all(cid: int, aid: int, silent_if_none: bool = False) -> int:
+    """Reklamani botdagi (Pro/VIP/admin bo'lmagan) hamma foydalanuvchiga yuboradi. Fon rejimida; tugagach adminga hisobot."""
+    adm = _deps.get("admin")
+    from backend import ads as _ads
+    try:
+        row = await asyncio.to_thread(_ads.get_row, aid)
+        tids = await asyncio.to_thread(adm._audience, "free")
+    except Exception:
+        row, tids = None, []
+    if not row or not tids:
+        if not silent_if_none:
+            await _send(cid, "⚠️ Reklama yoki qabul qiluvchi topilmadi.", _akb([[_btn("📢 Reklamalar", "a:ads")]]))
+        return 0
+    pub = _ads.public(row, "bot")
+    link = (SITE_URL + pub["click_url"]) if pub["has_link"] else ""
+
+    async def _push():
+        ok = bad = 0
+        good_ids: list = []
+        bad_ids: list = []
+        for tid in tids:
+            try:
+                if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"], ad_id=int(aid)):
+                    ok += 1; good_ids.append(int(tid))
+                else:
+                    bad += 1; bad_ids.append(int(tid))
+            except Exception:
+                bad += 1; bad_ids.append(int(tid))
+            await asyncio.sleep(0.06)
+        _AD_REPORTS[int(aid)] = {"ok": good_ids, "bad": bad_ids, "t": time.time()}
         try:
-            asyncio.get_running_loop().create_task(_gone())
+            await asyncio.to_thread(_ads.bump, int(row["id"]), "impression")
         except Exception:
             pass
-    return bool(sent)
+        await _send(cid, f"✅ Reklama botga yuborildi:\n✔️ yetdi: <b>{ok}</b>\n✖️ yetmadi: <b>{bad}</b> (botni to'xtatgan/bloklaganlar)",
+                    _akb([[_btn("📋 Kimlarga yetdi / yetmadi", f"a:ad:r:{aid}")], [_btn("📢 Reklamalar", "a:ads")]]))
+    _keep_task(asyncio.get_running_loop().create_task(_push()))
+    return len(tids)
 
 
 def _wiz_nav(extra: Optional[list] = None) -> dict:
@@ -1367,9 +1493,15 @@ async def _wiz_save(cid: int, mid: Optional[int], user: dict, adm) -> None:
         return
     _state(cid).pop("adm", None)
     _adm_disk_clear(cid)
-    await _show(cid, mid, f"✅ <b>Reklama joylandi</b> \n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi o'chadi.",
-                _akb([[_btn("📤 Hozir hammaga yuborish", f"a:ad:p:{res.get('id')}")] if res.get("id") else [_btn("📢 Reklamalar", "a:ads")],
-                      [_btn("📢 Reklamalar", "a:ads")], _HOME]))
+    new_id = int(res.get("id") or 0)
+    to_bot = ad.get("placement") in ("bot", "both") and new_id
+    n_sent = 0
+    if to_bot:
+        n_sent = await _push_ad_all(cid, new_id, silent_if_none=True)
+    where = "🌐 saytda" if ad.get("placement") == "site" else ("🤖 botda" if ad.get("placement") == "bot" else "🤖 botda va 🌐 saytda")
+    sent_line = (f"\n📤 Botga <b>{n_sent}</b> ta foydalanuvchiga yuborilmoqda…" if n_sent else ("\n⚠️ Botda qabul qiluvchi topilmadi." if to_bot else ""))
+    await _show(cid, mid, f"✅ <b>Reklama joylandi</b> ({where})\n⏰ {_hours_text(ad.get('hours') or 24)} davomida ko'rsatiladi, keyin o'zi tugaydi.{sent_line}",
+                _akb([[_btn("📢 Reklamalar", "a:ads")], _HOME]))
 
 
 async def _photo_to_data_url(file_id: str) -> Optional[str]:
@@ -1541,12 +1673,18 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
             rows = (await asyncio.to_thread(adm._dispatch, "ads", {}, actor)).get("ads", [])
             cur = next((r for r in rows if int(r["id"]) == aid), None)
             if cur:
-                await asyncio.to_thread(adm._dispatch, "ad_toggle", {"id": aid, "active": not cur.get("active")}, actor)
-                if cur.get("active"):
-                    asyncio.create_task(_ad_purge(aid))
+                expired = bool(cur.get("ends_at")) and _left_text(cur.get("ends_at")) == "⌛ tugagan"
+                running = bool(cur.get("active")) and not expired
+                if running:
+                    # 1-tugma: reklama saytdan ham, botdan ham to'xtaydi (chatdagi xabarlar o'chmaydi)
+                    await asyncio.to_thread(adm._dispatch, "ad_toggle", {"id": aid, "active": False}, actor)
+                else:
+                    if expired:           # muddati tugagan reklamani qayta yoqsa — yana 24 soat
+                        await asyncio.to_thread(_ad_set_ends, adm, aid, datetime.now(timezone.utc) + timedelta(hours=24))
+                    await asyncio.to_thread(adm._dispatch, "ad_toggle", {"id": aid, "active": True}, actor)
             await _admin_ads(cid, mid, adm, user)
         elif sub == "d" and aid:
-            await _show(cid, mid, f"🗑 Reklama o'chirilsinmi?\nBu qaytarilmaydi.", _akb([[_btn("✅ Ha, o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
+            await _show(cid, mid, "🗑 <b>Reklama butunlay o'chirilsinmi?</b>\n\nSaytdan ham, foydalanuvchilarning botdagi chatlaridan ham o'chadi. Bu qaytarilmaydi.\n<i>Faqat to'xtatmoqchi bo'lsangiz — «⏹ To'xtatish» ni bosing.</i>", _akb([[_btn("✅ Ha, hammasini o'chirish", f"a:ad:dd:{aid}"), _btn("↩️ Yo'q", "a:ads")]]))
         elif sub == "pl" and aid:
             try:
                 from backend import ads as _ads
@@ -1576,43 +1714,12 @@ async def _admin_cb(cid: int, mid: Optional[int], user: dict, data: str) -> None
                 await _show(cid, mid, f"📋 <b>Reklama hisoboti</b>\n\n✔️ <b>Yetdi ({len(rep['ok'])}):</b>\n{_fmt(rep['ok'])}\n\n✖️ <b>Yetmadi ({len(rep['bad'])}):</b>\n{_fmt(rep['bad'])}",
                             _akb([[_btn("↩️ Reklamalar", "a:ads")]]))
         elif sub == "pp" and aid:
-            try:
-                from backend import ads as _ads
-                row = await asyncio.to_thread(_ads.get_row, aid)
-                tids = await asyncio.to_thread(adm._audience, "free")
-            except Exception:
-                row, tids = None, []
-            if not row or not tids:
-                await _show(cid, mid, "⚠️ Reklama yoki qabul qiluvchi topilmadi.", _akb([[_btn("↩️ Orqaga", "a:ads")]]))
-            else:
-                pub = _ads.public(row, "bot")
-                link = (SITE_URL + pub["click_url"]) if pub["has_link"] else ""
-
-                async def _push():
-                    ok = bad = 0
-                    good_ids: list = []
-                    bad_ids: list = []
-                    for tid in tids:
-                        try:
-                            if await _deliver_ad(int(tid), pub["title"], pub["body"], pub["media_type"], pub["media_url"], link, pub["button_text"], ad_id=int(aid)):
-                                ok += 1; good_ids.append(int(tid))
-                            else:
-                                bad += 1; bad_ids.append(int(tid))
-                        except Exception:
-                            bad += 1; bad_ids.append(int(tid))
-                        await asyncio.sleep(0.06)
-                    _AD_REPORTS[int(aid)] = {"ok": good_ids, "bad": bad_ids, "t": time.time()}
-                    try:
-                        await asyncio.to_thread(_ads.bump, int(row["id"]), "impression")
-                    except Exception:
-                        pass
-                    await _send(cid, f"✅ Reklama yuborildi:\n✔️ yetdi: <b>{ok}</b>\n✖️ yetmadi: <b>{bad}</b> (botni to'xtatgan/bloklaganlar)",
-                                _akb([[_btn("📋 Kimlarga yetdi / yetmadi", f"a:ad:r:{aid}")], [_btn("📢 Reklamalar", "a:ads")]]))
-                asyncio.create_task(_push())
-                await _show(cid, mid, f"📤 Yuborish boshlandi ({len(tids)} ta). Tugagach xabar keladi.", _akb([[_btn("↩️ Reklamalar", "a:ads")], _HOME]))
+            n = await _push_ad_all(cid, aid)
+            if n:
+                await _show(cid, mid, f"📤 Yuborish boshlandi ({n} ta). Tugagach xabar keladi.", _akb([[_btn("↩️ Reklamalar", "a:ads")], _HOME]))
         elif sub == "dd" and aid:
             await asyncio.to_thread(adm._dispatch, "ad_delete", {"id": aid}, actor)
-            asyncio.create_task(_ad_purge(aid))
+            _keep_task(asyncio.get_running_loop().create_task(_ad_purge(aid)))
             await _admin_ads(cid, mid, adm, user)
         elif sub == "v" and aid:
             try:
@@ -3348,6 +3455,7 @@ async def startup() -> None:
     t = asyncio.create_task(_bootstrap())          # startni bloklamaydi
     _bg.add(t)
     t.add_done_callback(_bg.discard)
+    _ad_sweeper_start()                            # reklama/ko'rib chiqish xabarlarini tozalovchi (restartdan keyin ham)
 
 
 async def shutdown() -> None:
